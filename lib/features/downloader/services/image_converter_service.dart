@@ -33,8 +33,9 @@ class ImageConverterService {
         newPath = '$basePath.png';
         break;
       case ImageTargetFormat.webp:
-        outputBytes = img.encodePng(decodedImage); // fallback or webp
-        newPath = '$basePath.png';
+        // Use the WebP encoder from the image package.
+        outputBytes = img.encodeWebP(decodedImage);
+        newPath = '$basePath.webp';
         break;
       case ImageTargetFormat.original:
         return inputFile;

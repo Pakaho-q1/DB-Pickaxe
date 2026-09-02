@@ -3,6 +3,7 @@ import '../../features/browser/domain/models/bookmark.dart';
 import '../../features/browser/domain/models/history_item.dart';
 import '../../features/downloader/domain/models/download_task.dart';
 import '../../features/settings/domain/models/app_settings.dart';
+import '../../features/sniffer/domain/models/media_filter.dart';
 import 'cache_paths.dart';
 
 class HiveService {
@@ -11,14 +12,19 @@ class HiveService {
   static const String historyBoxName = 'history_box';
   static const String downloadsBoxName = 'downloads_box';
   static const String cookiesBoxName = 'cookies_box';
+  static const String sessionBoxName = 'session_box';
 
   static late Box settingsBox;
   static late Box bookmarksBox;
   static late Box historyBox;
   static late Box downloadsBox;
   static late Box cookiesBox;
+  static late Box sessionBox;
 
   static Future<void> init() async {
+    // Ensure all .pickaxe-cache sub-directories exist before any path is accessed.
+    CachePaths.ensureDirectoriesExist();
+
     // Strictly isolate Hive database files inside .pickaxe-cache/database
     final dbDir = CachePaths.databaseDir;
     Hive.init(dbDir.path);
@@ -28,6 +34,7 @@ class HiveService {
     historyBox = await Hive.openBox(historyBoxName);
     downloadsBox = await Hive.openBox(downloadsBoxName);
     cookiesBox = await Hive.openBox(cookiesBoxName);
+    sessionBox = await Hive.openBox(sessionBoxName);
   }
 
   // Settings
@@ -39,6 +46,54 @@ class HiveService {
 
   static Future<void> saveSettings(AppSettings settings) async {
     await settingsBox.put('current_settings', settings.toMap());
+  }
+
+  // Sniffer UI Preferences Persistence
+  static MediaFilter getSnifferFilter() {
+    final map = settingsBox.get('sniffer_filter');
+    if (map == null) return const MediaFilter();
+    return MediaFilter.fromMap(Map<dynamic, dynamic>.from(map as Map));
+  }
+
+  static Future<void> saveSnifferFilter(MediaFilter filter) async {
+    await settingsBox.put('sniffer_filter', filter.toMap());
+  }
+
+  static bool getIsAutoDetect() {
+    return settingsBox.get('is_auto_detect', defaultValue: true) as bool;
+  }
+
+  static Future<void> saveIsAutoDetect(bool isAuto) async {
+    await settingsBox.put('is_auto_detect', isAuto);
+  }
+
+  static bool getKeepMediaAcrossPages() {
+    return settingsBox.get('keep_media_across_pages', defaultValue: false) as bool;
+  }
+
+  static Future<void> saveKeepMediaAcrossPages(bool keep) async {
+    await settingsBox.put('keep_media_across_pages', keep);
+  }
+
+  // Browser Session & Tabs Persistence
+  static List<Map<String, dynamic>> getSessionTabs() {
+    final raw = sessionBox.get('active_tabs');
+    if (raw == null) return [];
+    try {
+      final list = (raw as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      return list;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  static String getLastActiveTabId() {
+    return sessionBox.get('last_active_tab_id', defaultValue: '') as String;
+  }
+
+  static Future<void> saveSessionTabs(List<Map<String, dynamic>> tabs, String activeTabId) async {
+    await sessionBox.put('active_tabs', tabs);
+    await sessionBox.put('last_active_tab_id', activeTabId);
   }
 
   // Bookmarks
@@ -117,11 +172,10 @@ class HiveService {
   }
 
   static String? getCookiesForDomain(String domain) {
-    // Exact or wildcard domain match
     final clean = domain.toLowerCase().replaceFirst(RegExp(r'^www\.'), '');
     for (var key in cookiesBox.keys) {
-      final k = key.toString().toLowerCase().replaceFirst(RegExp(r'^\.?www\.'), '').replaceFirst(RegExp(r'^\.'), '');
-      if (clean.contains(k) || k.contains(clean)) {
+      final k = key.toString().toLowerCase().replaceFirst(RegExp(r'^\.?www\.'), '').replaceFirst(RegExp(r'^\.'),'');
+      if (clean == k || clean.endsWith('.$k')) {
         return cookiesBox.get(key)?.toString();
       }
     }

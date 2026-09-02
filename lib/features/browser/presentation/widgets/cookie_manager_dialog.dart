@@ -18,11 +18,33 @@ class _CookieManagerDialogState extends ConsumerState<CookieManagerDialog> {
   late Map<String, String> _cookies;
   final TextEditingController _domainController = TextEditingController();
   final TextEditingController _cookieValueController = TextEditingController();
+  bool _domainPrefilled = false;
 
   @override
   void initState() {
     super.initState();
     _loadCookies();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Pre-fill active domain once (guarded by flag to avoid resetting on every
+    // dependency change while the field is empty).
+    if (!_domainPrefilled) {
+      _domainPrefilled = true;
+      try {
+        final activeTabId = ref.read(activeTabIdProvider);
+        final tabs = ref.read(browserTabsProvider);
+        final activeTab = tabs.firstWhere((t) => t.id == activeTabId, orElse: () => const BrowserTab(id: ''));
+        if (activeTab.url.isNotEmpty) {
+          final host = Uri.parse(activeTab.url).host.replaceFirst(RegExp(r'^www\.'), '');
+          if (host.isNotEmpty) {
+            _domainController.text = host;
+          }
+        }
+      } catch (_) {}
+    }
   }
 
   void _loadCookies() {
@@ -43,16 +65,6 @@ class _CookieManagerDialogState extends ConsumerState<CookieManagerDialog> {
     final activeTabId = ref.watch(activeTabIdProvider);
     final tabs = ref.watch(browserTabsProvider);
     final activeTab = tabs.firstWhere((t) => t.id == activeTabId, orElse: () => const BrowserTab(id: ''));
-
-    // Pre-fill active domain if empty
-    if (_domainController.text.isEmpty && activeTab.url.isNotEmpty) {
-      try {
-        final host = Uri.parse(activeTab.url).host.replaceFirst(RegExp(r'^www\.'), '');
-        if (host.isNotEmpty) {
-          _domainController.text = host;
-        }
-      } catch (_) {}
-    }
 
     return Dialog(
       backgroundColor: AppTheme.darkSurface,

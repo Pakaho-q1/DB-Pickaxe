@@ -11,12 +11,15 @@ class CookieManagerService {
     // 1. Persist to local Hive database
     await HiveService.saveCookieForDomain(domain, cookieString);
 
-    // 2. Inject into WebView document session via JS
+    // 2. Inject into WebView document session via JS.
+    // Cookie value is escaped to prevent JS injection (single/double quotes in cookie values
+    // would otherwise break out of the JS string literal → XSS vector).
     final pairs = cookieString.split(';');
     for (final pair in pairs) {
       final trimmed = pair.trim();
       if (trimmed.isNotEmpty) {
-        final js = "document.cookie = '$trimmed; path=/; domain=$domain; max-age=31536000';";
+        final escaped = trimmed.replaceAll(r'\', r'\\').replaceAll("'", r"\'").replaceAll('"', r'\"');
+        final js = "document.cookie = '$escaped; path=/; domain=$domain; max-age=31536000';";
         try {
           await controller.executeScript(js);
         } catch (_) {}

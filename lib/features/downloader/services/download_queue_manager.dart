@@ -3,10 +3,10 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../../../core/constants/app_constants.dart';
-import '../../../../core/network/dio_client.dart';
 import '../../../../core/storage/hive_service.dart';
 import '../../settings/domain/models/app_settings.dart';
 import '../domain/models/download_task.dart';
+import 'chunked_downloader_service.dart';
 import 'ffmpeg_stream_service.dart';
 import 'image_converter_service.dart';
 
@@ -116,36 +116,22 @@ class DownloadQueueManager {
           },
         );
       } else {
-        // Direct Download via Dio
-        final dio = DioClient.createDio(
-          settings,
+        // Multi-Threaded / Resumable Chunked Download
+        await ChunkedDownloaderService.download(
+          taskId: task.id,
+          url: task.url,
+          destinationPath: fullFilePath,
+          settings: settings,
           refererUrl: task.pageUrl,
           customHeaders: task.headers,
-        );
-
-        var lastBytes = 0;
-        var lastTime = DateTime.now();
-
-        await dio.download(
-          task.url,
-          fullFilePath,
-          cancelToken: cancelToken,
-          onReceiveProgress: (received, total) {
-            final now = DateTime.now();
-            final durationMs = now.difference(lastTime).inMilliseconds;
-
-            double speed = 0;
-            if (durationMs >= 500) {
-              final byteDiff = received - lastBytes;
-              speed = (byteDiff / (durationMs / 1000.0));
-              lastBytes = received;
-              lastTime = now;
-            }
-
+          parentCancelToken: cancelToken,
+          onProgress: (received, total, speed, isResumable, chunkCount) {
             currentTask = currentTask.copyWith(
               downloadedBytes: received,
               totalBytes: total > 0 ? total : currentTask.totalBytes,
               speedBytesPerSec: speed > 0 ? speed : currentTask.speedBytesPerSec,
+              isResumable: isResumable,
+              chunkCount: chunkCount,
             );
             onTaskUpdated(currentTask);
           },
@@ -206,6 +192,7 @@ class DownloadQueueManager {
       _activeTaskIds.remove(task.id);
       _cancelTokens.remove(task.id);
       FfmpegStreamService.cancel(task.id);
+      ChunkedDownloaderService.cancel(task.id);
       // Trigger next pending tasks in queue
       processQueue(HiveService.getDownloadTasks(), settings);
     }
@@ -217,6 +204,7 @@ class DownloadQueueManager {
       _cancelTokens.remove(taskId);
     }
     FfmpegStreamService.cancel(taskId);
+    ChunkedDownloaderService.cancel(taskId);
     _activeTaskIds.remove(taskId);
   }
 }

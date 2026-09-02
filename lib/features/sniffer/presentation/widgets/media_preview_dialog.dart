@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/utils/formatters.dart';
+import '../../../../core/utils/media_type_helper.dart';
 import '../../../browser/presentation/providers/browser_tabs_provider.dart';
 import '../../../downloader/presentation/providers/download_queue_provider.dart';
 import '../../domain/models/detected_media.dart';
@@ -16,30 +17,9 @@ class MediaPreviewDialog extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    IconData typeIcon;
-    Color typeColor;
-
-    switch (media.mediaType) {
-      case MediaType.video:
-        typeIcon = Icons.movie;
-        typeColor = AppTheme.accentRose;
-        break;
-      case MediaType.stream:
-        typeIcon = Icons.live_tv;
-        typeColor = AppTheme.accentAmber;
-        break;
-      case MediaType.image:
-        typeIcon = Icons.image;
-        typeColor = AppTheme.accentCyan;
-        break;
-      case MediaType.audio:
-        typeIcon = Icons.audiotrack;
-        typeColor = AppTheme.primaryLight;
-        break;
-      default:
-        typeIcon = Icons.insert_drive_file;
-        typeColor = AppTheme.darkTextSecondary;
-    }
+    final (:icon, :color) = MediaTypeHelper.propsFor(media.mediaType);
+    final typeIcon = icon;
+    final typeColor = color;
 
     return Dialog(
       backgroundColor: AppTheme.darkSurface,

@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../downloader/services/ffmpeg_installer_service.dart';
 import '../../domain/models/app_settings.dart';
+import '../../domain/models/app_shortcuts.dart';
 import '../providers/settings_provider.dart';
 
 class SettingsDialog extends ConsumerStatefulWidget {
@@ -28,11 +30,15 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> with SingleTick
   late TextEditingController _dohController;
 
   late AppSettings _tempSettings;
+  bool _isFfmpegInstalled = false;
+  bool _isInstallingFfmpeg = false;
+  double _ffmpegInstallProgress = 0.0;
+  String _ffmpegInstallStatus = '';
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _tempSettings = ref.read(settingsProvider);
 
     _downloadPathController = TextEditingController(text: _tempSettings.defaultDownloadPath);
@@ -46,6 +52,49 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> with SingleTick
     _proxyUserController = TextEditingController(text: _tempSettings.proxyUsername);
     _proxyPassController = TextEditingController(text: _tempSettings.proxyPassword);
     _dohController = TextEditingController(text: _tempSettings.customDohUrl);
+
+    _checkFfmpegStatus();
+  }
+
+  Future<void> _checkFfmpegStatus() async {
+    final installed = await FfmpegInstallerService.isFfmpegInstalled();
+    if (mounted) {
+      setState(() {
+        _isFfmpegInstalled = installed;
+      });
+    }
+  }
+
+  Future<void> _downloadPortableFfmpeg() async {
+    setState(() {
+      _isInstallingFfmpeg = true;
+      _ffmpegInstallProgress = 0.05;
+      _ffmpegInstallStatus = 'Connecting to download server...';
+    });
+
+    final success = await FfmpegInstallerService.downloadAndInstallPortableFfmpeg(
+      onProgress: (p, msg) {
+        if (mounted) {
+          setState(() {
+            _ffmpegInstallProgress = p;
+            _ffmpegInstallStatus = msg;
+          });
+        }
+      },
+    );
+
+    if (mounted) {
+      setState(() {
+        _isInstallingFfmpeg = false;
+        _isFfmpegInstalled = success;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success ? 'Portable FFmpeg installed successfully!' : 'FFmpeg installation failed.'),
+          backgroundColor: success ? AppTheme.accentGreen : AppTheme.accentRose,
+        ),
+      );
+    }
   }
 
   @override
@@ -69,8 +118,8 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> with SingleTick
   Widget build(BuildContext context) {
     return Dialog(
       child: Container(
-        width: 640,
-        height: 560,
+        width: 700,
+        height: 620,
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
@@ -100,9 +149,10 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> with SingleTick
               labelColor: AppTheme.primaryLight,
               unselectedLabelColor: AppTheme.darkTextSecondary,
               tabs: const [
-                Tab(icon: Icon(Icons.download, size: 16), text: 'Download & Queue'),
+                Tab(icon: Icon(Icons.download, size: 16), text: 'Download & Engine'),
                 Tab(icon: Icon(Icons.transform, size: 16), text: 'Format & Sniffer'),
                 Tab(icon: Icon(Icons.public, size: 16), text: 'Network & DNS'),
+                Tab(icon: Icon(Icons.keyboard, size: 16), text: 'Shortcuts (คีย์ลัด)'),
               ],
             ),
             const SizedBox(height: 12),
@@ -113,6 +163,7 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> with SingleTick
                   _buildDownloadTab(),
                   _buildFormatTab(),
                   _buildNetworkTab(),
+                  _buildShortcutsTab(),
                 ],
               ),
             ),
@@ -144,16 +195,137 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> with SingleTick
   Widget _buildDownloadTab() {
     return ListView(
       children: [
+        // Startup Behavior
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: AppTheme.darkSurface,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppTheme.darkBorder),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.launch, color: AppTheme.accentCyan, size: 18),
+                  SizedBox(width: 6),
+                  Text(
+                    'On Startup (พฤติกรรมเมื่อเปิดโปรแกรม)',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.darkTextPrimary),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              DropdownButtonFormField<AppStartupBehavior>(
+                initialValue: _tempSettings.startupBehavior,
+                dropdownColor: AppTheme.darkSurface,
+                decoration: const InputDecoration(isDense: true),
+                items: const [
+                  DropdownMenuItem(
+                    value: AppStartupBehavior.restoreAll,
+                    child: Text('Restore all open tabs (เปิดด้วยทุกแท็บที่เปิดค้างไว้ - แนะนำ)'),
+                  ),
+                  DropdownMenuItem(
+                    value: AppStartupBehavior.newTab,
+                    child: Text('Open new tab (เปิดด้วยแท็บใหม่หน้าเดียว)'),
+                  ),
+                  DropdownMenuItem(
+                    value: AppStartupBehavior.lastTab,
+                    child: Text('Open last active tab (เปิดด้วยแท็บล่าสุดอันเดียว)'),
+                  ),
+                  DropdownMenuItem(
+                    value: AppStartupBehavior.newTabPlusRestore,
+                    child: Text('New tab + Restore previous tabs (เปิดแท็บใหม่ + ทุกแท็บที่ค้างไว้)'),
+                  ),
+                ],
+                onChanged: (val) {
+                  if (val != null) {
+                    setState(() {
+                      _tempSettings = _tempSettings.copyWith(startupBehavior: val);
+                    });
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        // Multi-Threaded Range Download Acceleration
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: AppTheme.primaryColor.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppTheme.primaryLight.withValues(alpha: 0.3)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.bolt, color: AppTheme.accentCyan, size: 18),
+                  const SizedBox(width: 6),
+                  const Expanded(
+                    child: Text(
+                      'Multi-Threaded Download Acceleration (HTTP Range Chunks)',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.darkTextPrimary),
+                    ),
+                  ),
+                  Switch(
+                    value: _tempSettings.enableChunkedDownload,
+                    activeThumbColor: AppTheme.accentCyan,
+                    onChanged: (val) {
+                      setState(() {
+                        _tempSettings = _tempSettings.copyWith(enableChunkedDownload: val);
+                      });
+                    },
+                  ),
+                ],
+              ),
+              if (_tempSettings.enableChunkedDownload) ...[
+                const SizedBox(height: 6),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Threads per Download: ${_tempSettings.threadsPerDownload} connections',
+                      style: const TextStyle(fontSize: 11, color: AppTheme.darkTextSecondary),
+                    ),
+                    Text(
+                      '${_tempSettings.threadsPerDownload} Threads',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.accentCyan),
+                    ),
+                  ],
+                ),
+                Slider(
+                  value: _tempSettings.threadsPerDownload.toDouble(),
+                  min: 1,
+                  max: 16,
+                  divisions: 15,
+                  activeColor: AppTheme.accentCyan,
+                  label: '${_tempSettings.threadsPerDownload} Threads',
+                  onChanged: (val) {
+                    setState(() {
+                      _tempSettings = _tempSettings.copyWith(threadsPerDownload: val.toInt());
+                    });
+                  },
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
         // Concurrency Slider
         ListTile(
           contentPadding: EdgeInsets.zero,
-          title: const Text('Max Concurrent Downloads', style: TextStyle(fontSize: 13, color: AppTheme.darkTextPrimary)),
+          title: const Text('Max Concurrent Queue Tasks', style: TextStyle(fontSize: 13, color: AppTheme.darkTextPrimary)),
           subtitle: Text(
             'Current: ${_tempSettings.maxConcurrentDownloads} tasks simultaneously',
             style: const TextStyle(fontSize: 11, color: AppTheme.darkTextSecondary),
           ),
           trailing: SizedBox(
-            width: 180,
+            width: 160,
             child: Slider(
               value: _tempSettings.maxConcurrentDownloads.toDouble(),
               min: 1,
@@ -167,6 +339,86 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> with SingleTick
                 });
               },
             ),
+          ),
+        ),
+        const Divider(),
+        // Portable FFmpeg Tool Manager
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: AppTheme.darkSurface,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppTheme.darkBorder),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.live_tv, size: 18, color: AppTheme.accentAmber),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'FFmpeg Stream Engine (HLS / m3u8)',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.darkTextPrimary),
+                      ),
+                    ],
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: (_isFfmpegInstalled ? AppTheme.accentGreen : AppTheme.accentRose).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                        color: (_isFfmpegInstalled ? AppTheme.accentGreen : AppTheme.accentRose).withValues(alpha: 0.4),
+                      ),
+                    ),
+                    child: Text(
+                      _isFfmpegInstalled ? 'READY' : 'NOT FOUND',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        color: _isFfmpegInstalled ? AppTheme.accentGreen : AppTheme.accentRose,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'FFmpeg is required to capture and convert live video streams (.m3u8) into MP4.',
+                style: TextStyle(fontSize: 11, color: AppTheme.darkTextSecondary),
+              ),
+              const SizedBox(height: 8),
+              if (_isInstallingFfmpeg) ...[
+                LinearProgressIndicator(
+                  value: _ffmpegInstallProgress > 0 ? _ffmpegInstallProgress : null,
+                  backgroundColor: AppTheme.darkBackground,
+                  color: AppTheme.accentCyan,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _ffmpegInstallStatus,
+                  style: const TextStyle(fontSize: 10, color: AppTheme.accentCyan),
+                ),
+              ] else ...[
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _isFfmpegInstalled ? AppTheme.darkSurface : AppTheme.accentGreen,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  ),
+                  icon: Icon(_isFfmpegInstalled ? Icons.check_circle : Icons.cloud_download, size: 14),
+                  label: Text(
+                    _isFfmpegInstalled ? 'Update / Reinstall Portable FFmpeg' : 'Download Portable FFmpeg (~25MB)',
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                  onPressed: _downloadPortableFfmpeg,
+                ),
+              ],
+            ],
           ),
         ),
         const Divider(),
@@ -350,6 +602,90 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> with SingleTick
             });
           },
         ),
+        const SizedBox(height: 16),
+        const Divider(),
+        // Floating Sniffer Hub Customization
+        const Text(
+          'Floating Sniffer Hub (แผงควบคุมลอยบนหน้าเว็บ)',
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.darkTextPrimary),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Customize the floating media detector widget overlaid on web pages.',
+          style: TextStyle(fontSize: 11, color: AppTheme.darkTextSecondary),
+        ),
+        const SizedBox(height: 10),
+        DropdownButtonFormField<SnifferHubStyle>(
+          initialValue: _tempSettings.snifferHubStyle,
+          dropdownColor: AppTheme.darkSurface,
+          decoration: const InputDecoration(
+            labelText: 'Hub Component Style (รูปแบบแผงลอย)',
+            isDense: true,
+          ),
+          items: const [
+            DropdownMenuItem(
+              value: SnifferHubStyle.glassCapsule,
+              child: Text('Glass Capsule (แคปซูลกระจกพรีเมียม - แนะนำ)'),
+            ),
+            DropdownMenuItem(
+              value: SnifferHubStyle.miniFab,
+              child: Text('Mini FAB Ring (ปุ่มวงกลมมินิมอล)'),
+            ),
+            DropdownMenuItem(
+              value: SnifferHubStyle.slimBar,
+              child: Text('Slim Docked Bar (แถบสลิมติดขอบจอ)'),
+            ),
+          ],
+          onChanged: (style) {
+            if (style != null) {
+              setState(() {
+                _tempSettings = _tempSettings.copyWith(snifferHubStyle: style);
+              });
+            }
+          },
+        ),
+        const SizedBox(height: 10),
+        DropdownButtonFormField<SnifferHubPosition>(
+          initialValue: _tempSettings.snifferHubPosition,
+          dropdownColor: AppTheme.darkSurface,
+          decoration: const InputDecoration(
+            labelText: 'Default Position (ตำแหน่งเริ่มต้นบนหน้าจอ)',
+            isDense: true,
+          ),
+          items: const [
+            DropdownMenuItem(
+              value: SnifferHubPosition.bottomRight,
+              child: Text('Bottom-Right (มุมล่างขวา - แนะนำ)'),
+            ),
+            DropdownMenuItem(
+              value: SnifferHubPosition.bottomLeft,
+              child: Text('Bottom-Left (มุมล่างซ้าย)'),
+            ),
+            DropdownMenuItem(
+              value: SnifferHubPosition.bottomCenter,
+              child: Text('Bottom-Center (กึ่งกลางล่าง)'),
+            ),
+            DropdownMenuItem(
+              value: SnifferHubPosition.topRight,
+              child: Text('Top-Right (มุมบนขวา)'),
+            ),
+            DropdownMenuItem(
+              value: SnifferHubPosition.topLeft,
+              child: Text('Top-Left (มุมบนซ้าย)'),
+            ),
+            DropdownMenuItem(
+              value: SnifferHubPosition.customDraggable,
+              child: Text('Custom Draggable (ลากตำแหน่งอิสระได้ตามใจ)'),
+            ),
+          ],
+          onChanged: (pos) {
+            if (pos != null) {
+              setState(() {
+                _tempSettings = _tempSettings.copyWith(snifferHubPosition: pos);
+              });
+            }
+          },
+        ),
       ],
     );
   }
@@ -455,6 +791,199 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> with SingleTick
           ),
         ],
       ],
+    );
+  }
+
+  Widget _buildShortcutsTab() {
+    final s = _tempSettings.shortcuts;
+
+    return ListView(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Custom Keyboard Shortcuts (ปรับแต่งคีย์ลัด)',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.darkTextPrimary),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  'Customize essential hotkeys for lightning-fast browsing & downloading.',
+                  style: TextStyle(fontSize: 11, color: AppTheme.darkTextSecondary),
+                ),
+              ],
+            ),
+            TextButton.icon(
+              icon: const Icon(Icons.restore, size: 14),
+              label: const Text('Reset Defaults', style: TextStyle(fontSize: 11)),
+              onPressed: () {
+                setState(() {
+                  _tempSettings = _tempSettings.copyWith(shortcuts: const AppShortcuts());
+                });
+              },
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _buildShortcutRow(
+          title: 'Close Active Tab (ปิดแท็บปัจจุบัน)',
+          description: 'Closes the current browser tab',
+          currentKey: s.closeTab,
+          onChanged: (newKey) => setState(() {
+            _tempSettings = _tempSettings.copyWith(shortcuts: s.copyWith(closeTab: newKey));
+          }),
+        ),
+        _buildShortcutRow(
+          title: 'New Tab (เปิดแท็บใหม่)',
+          description: 'Opens a new browser tab with default homepage',
+          currentKey: s.newTab,
+          onChanged: (newKey) => setState(() {
+            _tempSettings = _tempSettings.copyWith(shortcuts: s.copyWith(newTab: newKey));
+          }),
+        ),
+        _buildShortcutRow(
+          title: 'Close Other Tabs (ปิดแท็บอื่นๆ ทั้งหมด)',
+          description: 'Closes all tabs except the currently active tab',
+          currentKey: s.closeOtherTabs,
+          onChanged: (newKey) => setState(() {
+            _tempSettings = _tempSettings.copyWith(shortcuts: s.copyWith(closeOtherTabs: newKey));
+          }),
+        ),
+        _buildShortcutRow(
+          title: 'Detect / Re-detect Media (ตรวจจับสื่อ)',
+          description: 'Deep scans page. In Auto mode: Re-detects; in Manual mode: Detects.',
+          currentKey: s.detectMedia,
+          onChanged: (newKey) => setState(() {
+            _tempSettings = _tempSettings.copyWith(shortcuts: s.copyWith(detectMedia: newKey));
+          }),
+        ),
+        _buildShortcutRow(
+          title: 'Toggle Sniffer Panel (เปิด/ปิด Media Deck)',
+          description: 'Shows or hides the right-side media sniffer deck',
+          currentKey: s.toggleMediaDeck,
+          onChanged: (newKey) => setState(() {
+            _tempSettings = _tempSettings.copyWith(shortcuts: s.copyWith(toggleMediaDeck: newKey));
+          }),
+        ),
+        _buildShortcutRow(
+          title: 'Focus Address Bar (โฟกัสแถบ URL)',
+          description: 'Selects the URL bar for typing new address or search',
+          currentKey: s.focusUrlBar,
+          onChanged: (newKey) => setState(() {
+            _tempSettings = _tempSettings.copyWith(shortcuts: s.copyWith(focusUrlBar: newKey));
+          }),
+        ),
+        _buildShortcutRow(
+          title: 'Hover Media Quick Download (โหลดเมื่อเมาส์ชี้)',
+          description: 'Press while hovering video or image to queue download immediately',
+          currentKey: s.downloadHoverMedia,
+          onChanged: (newKey) => setState(() {
+            _tempSettings = _tempSettings.copyWith(shortcuts: s.copyWith(downloadHoverMedia: newKey));
+          }),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildShortcutRow({
+    required String title,
+    required String description,
+    required String currentKey,
+    required ValueChanged<String> onChanged,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppTheme.darkSurface,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: AppTheme.darkBorder),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.darkTextPrimary)),
+                const SizedBox(height: 2),
+                Text(description, style: const TextStyle(fontSize: 10, color: AppTheme.darkTextSecondary)),
+              ],
+            ),
+          ),
+          InkWell(
+            onTap: () async {
+              final selected = await _showKeyPicker(currentKey);
+              if (selected != null && selected.isNotEmpty) {
+                onChanged(selected);
+              }
+            },
+            borderRadius: BorderRadius.circular(4),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppTheme.primaryColor.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: AppTheme.primaryLight.withValues(alpha: 0.4)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    currentKey,
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.accentCyan),
+                  ),
+                  const SizedBox(width: 4),
+                  const Icon(Icons.edit, size: 11, color: AppTheme.primaryLight),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<String?> _showKeyPicker(String current) async {
+    final controller = TextEditingController(text: current);
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.darkSurface,
+        title: const Text('Change Shortcut Key', style: TextStyle(fontSize: 14, color: AppTheme.darkTextPrimary)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Type shortcut format (e.g. Ctrl+W, Ctrl+Shift+T, F5, Alt+D, Shift+D):',
+              style: TextStyle(fontSize: 11, color: AppTheme.darkTextSecondary),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.accentCyan),
+              decoration: const InputDecoration(isDense: true),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryColor),
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+            child: const Text('Apply'),
+          ),
+        ],
+      ),
     );
   }
 

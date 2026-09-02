@@ -24,6 +24,28 @@ enum DownloadStatus {
   cancelled,
 }
 
+enum AppStartupBehavior {
+  newTab,            // เปิดด้วยแท็บใหม่ (New Home Tab)
+  lastTab,           // เปิดด้วยแท็บล่าสุดอันเดียว (Last Active Tab)
+  restoreAll,        // เปิดด้วยทุกแท็บที่เปิดค้างไว้ (Restore All Tabs)
+  newTabPlusRestore, // เปิดด้วยแท็บใหม่ + ทุกแท็บที่เคยเปิดค้างไว้
+}
+
+enum SnifferHubStyle {
+  glassCapsule, // สไตล์แคปซูลกระจกพรีเมียม (Glassmorphism Pill - ค่าเริ่มต้น)
+  miniFab,      // สไตล์ปุ่มวงกลมมินิมอล (Compact Floating Ring / FAB)
+  slimBar,      // สไตล์แถบสลิมติดขอบจอ (Minimal Docked Bar)
+}
+
+enum SnifferHubPosition {
+  bottomRight,   // มุมล่างขวา (ค่าเริ่มต้น)
+  bottomLeft,    // มุมล่างซ้าย
+  bottomCenter,  // กึ่งกลางล่าง
+  topRight,      // มุมบนขวา
+  topLeft,       // มุมบนซ้าย
+  customDraggable, // ลากตำแหน่งอิสระได้ตามใจ
+}
+
 class AppConstants {
   static const String appName = 'DB-Pickaxe';
   static const String appVersion = '1.0.0';

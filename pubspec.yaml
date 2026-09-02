@@ -1,5 +1,5 @@
 name: db_pickaxe
-description: "A new Flutter project."
+description: "DB-Pickaxe: A Windows desktop browser with built-in media sniffer and downloader. Detects and downloads videos, images, HLS streams, and audio from any webpage."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -31,9 +31,6 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # The following adds the Cupertino Icons font to your application.
-  # Use with the CupertinoIcons class for iOS style icons.
-  cupertino_icons: ^1.0.8
   flutter_riverpod: ^2.6.1
   hive_flutter: ^1.1.0
   hive: ^2.2.3

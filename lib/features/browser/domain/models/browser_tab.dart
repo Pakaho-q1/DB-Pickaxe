@@ -13,7 +13,7 @@ class BrowserTab {
   const BrowserTab({
     required this.id,
     this.title = '',
-    this.url = 'https://www.google.com',
+    this.url = '',
     this.isLoading = false,
     this.canGoBack = false,
     this.canGoForward = false,
@@ -21,35 +21,19 @@ class BrowserTab {
     this.controller,
   });
 
-  String get displayTitle {
-    final cleanTitle = title.trim();
-    if (cleanTitle.isNotEmpty &&
-        cleanTitle != 'about:blank' &&
-        cleanTitle != 'New Tab' &&
-        cleanTitle != 'Web Page') {
-      return cleanTitle;
+  /// Returns page title if available, otherwise returns dynamic fallback "Browser $index".
+  String getTitle(int index) {
+    final clean = title.trim();
+    if (clean.isNotEmpty &&
+        clean != 'about:blank' &&
+        clean != 'New Tab' &&
+        clean != 'Web Page') {
+      return clean;
     }
-
-    if (url.isNotEmpty && url != 'about:blank') {
-      try {
-        final uri = Uri.parse(url);
-        String host = uri.host.toLowerCase();
-        host = host.replaceFirst(RegExp(r'^www\.'), '');
-        if (host.isNotEmpty) {
-          final parts = host.split('.');
-          if (parts.isNotEmpty) {
-            final name = parts[0];
-            if (name.isNotEmpty) {
-              return name[0].toUpperCase() + (name.length > 1 ? name.substring(1) : '');
-            }
-          }
-          return host;
-        }
-      } catch (_) {}
-    }
-
-    return 'Google';
+    return 'Browser $index';
   }
+
+  String get displayTitle => getTitle(1);
 
   BrowserTab copyWith({
     String? title,
@@ -72,3 +56,4 @@ class BrowserTab {
     );
   }
 }
+

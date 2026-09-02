@@ -2,6 +2,7 @@ import '../../../../core/constants/app_constants.dart';
 
 class DetectedMedia {
   final String id;
+  final String tabId;
   final String url;
   final String pageUrl;
   final String filename;
@@ -17,6 +18,7 @@ class DetectedMedia {
 
   const DetectedMedia({
     required this.id,
+    this.tabId = '',
     required this.url,
     required this.pageUrl,
     required this.filename,
@@ -33,6 +35,7 @@ class DetectedMedia {
 
   DetectedMedia copyWith({
     String? id,
+    String? tabId,
     String? url,
     String? pageUrl,
     String? filename,
@@ -48,6 +51,7 @@ class DetectedMedia {
   }) {
     return DetectedMedia(
       id: id ?? this.id,
+      tabId: tabId ?? this.tabId,
       url: url ?? this.url,
       pageUrl: pageUrl ?? this.pageUrl,
       filename: filename ?? this.filename,

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../downloader/presentation/providers/download_queue_provider.dart';
+import '../../../downloader/presentation/widgets/direct_download_dialog.dart';
 import '../../../downloader/presentation/widgets/download_manager_dialog.dart';
 import '../../../settings/presentation/widgets/settings_dialog.dart';
 import '../../domain/models/browser_tab.dart';
@@ -28,6 +29,12 @@ class _BrowserNavigationBarState extends ConsumerState<BrowserNavigationBar> {
     _urlController = TextEditingController();
   }
 
+  void _syncUrlIfNeeded(String activeUrl) {
+    if (_urlController.text != activeUrl && !FocusScope.of(context).hasFocus) {
+      _urlController.text = activeUrl;
+    }
+  }
+
   @override
   void dispose() {
     _urlController.dispose();
@@ -40,10 +47,8 @@ class _BrowserNavigationBarState extends ConsumerState<BrowserNavigationBar> {
     final activeTabId = ref.watch(activeTabIdProvider);
     final activeTab = tabs.firstWhere((t) => t.id == activeTabId, orElse: () => const BrowserTab(id: ''));
 
-    // Update URL controller when active tab URL changes
-    if (_urlController.text != activeTab.url && !FocusScope.of(context).hasFocus) {
-      _urlController.text = activeTab.url;
-    }
+    // Sync URL bar when active tab URL changes externally (navigation, redirect, etc.)
+    _syncUrlIfNeeded(activeTab.url);
 
     final isBookmarked = ref.watch(bookmarksProvider.notifier).isBookmarked(activeTab.url);
     final downloadTasks = ref.watch(downloadQueueProvider);
@@ -116,6 +121,14 @@ class _BrowserNavigationBarState extends ConsumerState<BrowserNavigationBar> {
             ),
           ),
           const SizedBox(width: 6),
+          // Direct Link Downloader (Paste URL)
+          IconButton(
+            icon: const Icon(Icons.add_link, size: 20, color: AppTheme.accentCyan),
+            tooltip: 'Direct Link Downloader (Paste URL / Stream)',
+            onPressed: () {
+              showDialog(context: context, builder: (_) => const DirectDownloadDialog());
+            },
+          ),
           // Bookmarks List
           IconButton(
             icon: const Icon(Icons.bookmarks_outlined, size: 18, color: AppTheme.darkTextSecondary),

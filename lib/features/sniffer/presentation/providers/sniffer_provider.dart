@@ -1,17 +1,55 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../../../core/constants/app_constants.dart';
+import '../../../../core/storage/hive_service.dart';
+import '../../../browser/presentation/providers/browser_tabs_provider.dart';
 import '../../domain/models/detected_media.dart';
 import '../../domain/models/media_filter.dart';
 
-final snifferFilterProvider = StateProvider<MediaFilter>((ref) => const MediaFilter());
+class SnifferFilterNotifier extends StateNotifier<MediaFilter> {
+  SnifferFilterNotifier() : super(HiveService.getSnifferFilter());
 
-final snifferProvider = StateNotifierProvider<SnifferNotifier, List<DetectedMedia>>((ref) {
+  @override
+  set state(MediaFilter value) {
+    super.state = value;
+    HiveService.saveSnifferFilter(value);
+  }
+}
+
+class KeepMediaNotifier extends StateNotifier<bool> {
+  KeepMediaNotifier() : super(HiveService.getKeepMediaAcrossPages());
+
+  @override
+  set state(bool value) {
+    super.state = value;
+    HiveService.saveKeepMediaAcrossPages(value);
+  }
+}
+
+final snifferFilterProvider = StateNotifierProvider<SnifferFilterNotifier, MediaFilter>((ref) {
+  return SnifferFilterNotifier();
+});
+
+/// Toggle to keep detected media across page navigations (Persisted)
+final keepMediaAcrossPagesProvider = StateNotifierProvider<KeepMediaNotifier, bool>((ref) {
+  return KeepMediaNotifier();
+});
+
+/// Sniffer state mapped per tab ID: `Map<String, List<DetectedMedia>>`
+final snifferProvider = StateNotifierProvider<SnifferNotifier, Map<String, List<DetectedMedia>>>((ref) {
   return SnifferNotifier();
 });
 
+/// Media items strictly belonging to the currently active browser tab
+final activeTabMediaProvider = Provider<List<DetectedMedia>>((ref) {
+  final snifferMap = ref.watch(snifferProvider);
+  final activeTabId = ref.watch(activeTabIdProvider);
+  return snifferMap[activeTabId] ?? const [];
+});
+
+/// Filtered & Sorted media items for the active browser tab
 final filteredMediaProvider = Provider<List<DetectedMedia>>((ref) {
-  final items = ref.watch(snifferProvider);
+  final items = ref.watch(activeTabMediaProvider);
   final filter = ref.watch(snifferFilterProvider);
 
   var list = items.where((item) {
@@ -86,25 +124,182 @@ final filteredMediaProvider = Provider<List<DetectedMedia>>((ref) {
   return list;
 });
 
-class SnifferNotifier extends StateNotifier<List<DetectedMedia>> {
-  SnifferNotifier() : super([]);
+class SnifferNotifier extends StateNotifier<Map<String, List<DetectedMedia>>> {
+  SnifferNotifier() : super({});
 
-  final Set<String> _detectedUrls = {};
+  final Map<String, Set<String>> _tabDetectedUrls = {};
+
+  /// Smart Canonical URL Stripping for deduplication & sizing normalization
+  String _canonicalUrl(String rawUrl) {
+    try {
+      final uri = Uri.parse(rawUrl);
+      final cleanParams = Map<String, dynamic>.from(uri.queryParameters)
+        ..removeWhere((k, v) => const [
+              '_',
+              'token',
+              't',
+              'timestamp',
+              'sig',
+              '_t',
+              'auth',
+              'expires',
+              'key',
+              'session',
+              'nonce',
+              'auto',
+              'w',
+              'h',
+              'width',
+              'height',
+              'fit',
+              'crop',
+              'q',
+              'quality',
+              'dpr',
+              'bytestart',
+              'byteend',
+              '_nc_cat',
+              '_nc_sid',
+              '_nc_ohc',
+              '_nc_ht',
+              'edm',
+              'ccb'
+            ].contains(k.toLowerCase()));
+
+      final base = '${uri.scheme}://${uri.host}${uri.path}';
+      if (cleanParams.isEmpty) return base.toLowerCase();
+      final sortedQuery = cleanParams.entries.map((e) => '${e.key}=${e.value}').join('&');
+      return '$base?$sortedQuery'.toLowerCase();
+    } catch (_) {
+      return rawUrl.split('?').first.toLowerCase();
+    }
+  }
+
+  void addMediaBatch({
+    required String tabId,
+    required List<Map<String, dynamic>> items,
+  }) {
+    if (tabId.isEmpty || items.isEmpty) return;
+
+    final detectedSet = _tabDetectedUrls.putIfAbsent(tabId, () => <String>{});
+    final currentTabList = List<DetectedMedia>.from(state[tabId] ?? []);
+    final newItems = <DetectedMedia>[];
+    bool hasUpdates = false;
+
+    for (final data in items) {
+      final url = data['url'] as String? ?? '';
+      if (url.isEmpty) continue;
+
+      final canonical = _canonicalUrl(url);
+      final pageUrl = data['pageUrl'] as String? ?? '';
+      final typeStr = data['type'] as String?;
+      final mime = data['mime'] as String?;
+      final title = data['title'] as String?;
+      final width = data['width'] as int? ?? 0;
+      final height = data['height'] as int? ?? 0;
+      final sizeBytes = data['sizeBytes'] as int? ?? 0;
+      final thumbnailUrl = data['thumbnailUrl'] as String?;
+      final domIndex = data['domIndex'] as int? ?? 0;
+
+      // If already exists, smart merge / enrich missing metadata
+      if (detectedSet.contains(canonical)) {
+        final existingIdx = currentTabList.indexWhere((m) => _canonicalUrl(m.url) == canonical);
+        if (existingIdx != -1) {
+          final old = currentTabList[existingIdx];
+          final updated = old.copyWith(
+            sizeBytes: old.sizeBytes > 0 ? old.sizeBytes : sizeBytes,
+            resolution: (old.resolution != null && old.resolution!.isNotEmpty)
+                ? old.resolution
+                : (width > 0 && height > 0 ? '${width}x$height' : null),
+            thumbnailUrl: (old.thumbnailUrl != null && old.thumbnailUrl!.isNotEmpty)
+                ? old.thumbnailUrl
+                : thumbnailUrl,
+          );
+          if (updated != old) {
+            currentTabList[existingIdx] = updated;
+            hasUpdates = true;
+          }
+        }
+        continue;
+      }
+
+      detectedSet.add(canonical);
+
+      final mediaType = _detectMediaType(url, typeStr, mime);
+      final ext = _extractExtension(url, mediaType);
+      final filename = _generateFilename(url, title, ext);
+
+      newItems.add(DetectedMedia(
+        id: const Uuid().v4(),
+        tabId: tabId,
+        url: url,
+        pageUrl: pageUrl,
+        filename: filename,
+        mediaType: mediaType,
+        extension: ext,
+        sizeBytes: sizeBytes,
+        thumbnailUrl: thumbnailUrl ?? (mediaType == MediaType.image ? url : null),
+        detectedAt: DateTime.now(),
+        resolution: width > 0 && height > 0 ? '${width}x$height' : null,
+        domIndex: domIndex,
+      ));
+    }
+
+    if (newItems.isNotEmpty || hasUpdates) {
+      state = {
+        ...state,
+        tabId: [...newItems, ...currentTabList],
+      };
+    }
+  }
 
   void addMedia({
+    required String tabId,
     required String url,
     required String pageUrl,
     String? title,
     String? typeStr,
     int width = 0,
     int height = 0,
+    int sizeBytes = 0,
     String? mime,
     String? thumbnailUrl,
     int domIndex = 0,
     Map<String, String>? headers,
   }) {
-    if (url.isEmpty || _detectedUrls.contains(url)) return;
-    _detectedUrls.add(url);
+    if (url.isEmpty || tabId.isEmpty) return;
+
+    final canonical = _canonicalUrl(url);
+    final detectedSet = _tabDetectedUrls.putIfAbsent(tabId, () => <String>{});
+    final currentTabList = List<DetectedMedia>.from(state[tabId] ?? []);
+
+    // Smart merge / enrich if already detected
+    if (detectedSet.contains(canonical)) {
+      final existingIdx = currentTabList.indexWhere((m) => _canonicalUrl(m.url) == canonical);
+      if (existingIdx != -1) {
+        final old = currentTabList[existingIdx];
+        final updated = old.copyWith(
+          sizeBytes: old.sizeBytes > 0 ? old.sizeBytes : sizeBytes,
+          resolution: (old.resolution != null && old.resolution!.isNotEmpty)
+              ? old.resolution
+              : (width > 0 && height > 0 ? '${width}x$height' : null),
+          thumbnailUrl: (old.thumbnailUrl != null && old.thumbnailUrl!.isNotEmpty)
+              ? old.thumbnailUrl
+              : thumbnailUrl,
+          headers: headers != null ? {...old.headers, ...headers} : old.headers,
+        );
+        if (updated != old) {
+          currentTabList[existingIdx] = updated;
+          state = {
+            ...state,
+            tabId: currentTabList,
+          };
+        }
+      }
+      return;
+    }
+
+    detectedSet.add(canonical);
 
     final mediaType = _detectMediaType(url, typeStr, mime);
     final ext = _extractExtension(url, mediaType);
@@ -112,11 +307,13 @@ class SnifferNotifier extends StateNotifier<List<DetectedMedia>> {
 
     final item = DetectedMedia(
       id: const Uuid().v4(),
+      tabId: tabId,
       url: url,
       pageUrl: pageUrl,
       filename: filename,
       mediaType: mediaType,
       extension: ext,
+      sizeBytes: sizeBytes,
       thumbnailUrl: thumbnailUrl ?? (mediaType == MediaType.image ? url : null),
       headers: headers ?? {},
       detectedAt: DateTime.now(),
@@ -124,35 +321,57 @@ class SnifferNotifier extends StateNotifier<List<DetectedMedia>> {
       domIndex: domIndex,
     );
 
-    state = [item, ...state];
+    state = {
+      ...state,
+      tabId: [item, ...currentTabList],
+    };
   }
 
-  void toggleSelect(String id) {
-    state = state.map((item) {
-      if (item.id == id) {
-        return item.copyWith(isSelected: !item.isSelected);
-      }
-      return item;
-    }).toList();
+  void toggleSelect(String mediaId) {
+    state = state.map((tabId, list) {
+      final updatedList = list.map((item) {
+        if (item.id == mediaId) {
+          return item.copyWith(isSelected: !item.isSelected);
+        }
+        return item;
+      }).toList();
+      return MapEntry(tabId, updatedList);
+    });
   }
 
   void selectVisible(List<String> visibleIds, bool select) {
     final visibleSet = visibleIds.toSet();
-    state = state.map((item) {
-      if (visibleSet.contains(item.id)) {
-        return item.copyWith(isSelected: select);
-      }
-      return item;
-    }).toList();
+    state = state.map((tabId, list) {
+      final updatedList = list.map((item) {
+        if (visibleSet.contains(item.id)) {
+          return item.copyWith(isSelected: select);
+        }
+        return item;
+      }).toList();
+      return MapEntry(tabId, updatedList);
+    });
   }
 
-  void selectAll(bool select) {
-    state = state.map((item) => item.copyWith(isSelected: select)).toList();
+  void selectAllForTab(String tabId, bool select) {
+    final current = state[tabId];
+    if (current == null) return;
+    state = {
+      ...state,
+      tabId: current.map((item) => item.copyWith(isSelected: select)).toList(),
+    };
+  }
+
+  void clearTabMedia(String tabId) {
+    _tabDetectedUrls[tabId]?.clear();
+    state = {
+      ...state,
+      tabId: [],
+    };
   }
 
   void clearAll() {
-    _detectedUrls.clear();
-    state = [];
+    _tabDetectedUrls.clear();
+    state = {};
   }
 
   MediaType _detectMediaType(String url, String? typeStr, String? mime) {
@@ -213,15 +432,20 @@ class SnifferNotifier extends StateNotifier<List<DetectedMedia>> {
     if (title != null && title.trim().isNotEmpty) {
       final sanitized = title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
       if (sanitized.isNotEmpty) {
-        return sanitized.length > 50 ? '${sanitized.substring(0, 50)}$ext' : '$sanitized$ext';
+        final withExt = sanitized.toLowerCase().endsWith(ext.toLowerCase())
+            ? sanitized
+            : '$sanitized$ext';
+        return withExt.length > 60 ? '${withExt.substring(0, 56)}$ext' : withExt;
       }
     }
     try {
       final uri = Uri.parse(url);
       final segment = uri.pathSegments.isNotEmpty ? uri.pathSegments.last : 'media';
       if (segment.isNotEmpty) {
-        final sanitized = segment.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
-        return sanitized.contains('.') ? sanitized : '$sanitized$ext';
+        final sanitized = segment.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').split('?').first;
+        return sanitized.toLowerCase().endsWith(ext.toLowerCase())
+            ? sanitized
+            : '$sanitized$ext';
       }
     } catch (_) {}
     return 'media_${DateTime.now().millisecondsSinceEpoch}$ext';

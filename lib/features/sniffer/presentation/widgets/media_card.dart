@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/utils/formatters.dart';
+import '../../../../core/utils/media_type_helper.dart';
 import '../../../downloader/presentation/providers/download_queue_provider.dart';
 import '../../domain/models/detected_media.dart';
 import '../providers/sniffer_provider.dart';
@@ -17,30 +18,9 @@ class MediaCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    Color badgeColor;
-    IconData typeIcon;
-
-    switch (media.mediaType) {
-      case MediaType.video:
-        badgeColor = AppTheme.accentRose;
-        typeIcon = Icons.movie;
-        break;
-      case MediaType.stream:
-        badgeColor = AppTheme.accentAmber;
-        typeIcon = Icons.live_tv;
-        break;
-      case MediaType.image:
-        badgeColor = AppTheme.accentCyan;
-        typeIcon = Icons.image;
-        break;
-      case MediaType.audio:
-        badgeColor = AppTheme.primaryLight;
-        typeIcon = Icons.audiotrack;
-        break;
-      default:
-        badgeColor = AppTheme.darkTextSecondary;
-        typeIcon = Icons.insert_drive_file;
-    }
+    final (:icon, :color) = MediaTypeHelper.propsFor(media.mediaType);
+    final badgeColor = color;
+    final typeIcon = icon;
 
     return InkWell(
       onTap: () {
@@ -161,7 +141,7 @@ class MediaCard extends ConsumerWidget {
                         Text(
                           media.sizeBytes > 0
                               ? Formatters.formatBytes(media.sizeBytes)
-                              : (media.resolution != null ? media.resolution! : (media.mediaType == MediaType.stream ? 'Stream' : 'Ready')),
+                              : (media.mediaType == MediaType.stream ? 'Stream' : 'Ready'),
                           style: const TextStyle(fontSize: 9, color: AppTheme.darkTextSecondary),
                         ),
                         Row(
@@ -210,6 +190,9 @@ class MediaCard extends ConsumerWidget {
           final bytes = base64Decode(base64Str);
           return Image.memory(
             bytes,
+            cacheWidth: 320,
+            cacheHeight: 320,
+            filterQuality: FilterQuality.low,
             fit: BoxFit.cover,
             errorBuilder: (context, error, stackTrace) => _buildFallback(fallbackIcon, fallbackColor),
           );
@@ -217,6 +200,9 @@ class MediaCard extends ConsumerWidget {
       } else {
         return Image.network(
           media.thumbnailUrl!,
+          cacheWidth: 320,
+          cacheHeight: 320,
+          filterQuality: FilterQuality.low,
           fit: BoxFit.cover,
           errorBuilder: (context, error, stackTrace) => _buildFallback(fallbackIcon, fallbackColor),
         );
@@ -226,6 +212,9 @@ class MediaCard extends ConsumerWidget {
     if (media.mediaType == MediaType.image) {
       return Image.network(
         media.url,
+        cacheWidth: 320,
+        cacheHeight: 320,
+        filterQuality: FilterQuality.low,
         fit: BoxFit.cover,
         errorBuilder: (context, error, stackTrace) => _buildFallback(fallbackIcon, fallbackColor),
       );

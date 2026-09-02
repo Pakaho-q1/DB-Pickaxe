@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:webview_windows/webview_windows.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../sniffer/presentation/widgets/floating_sniffer_hub.dart';
 import '../providers/browser_tabs_provider.dart';
 
 class BrowserView extends ConsumerWidget {
-  const BrowserView({super.key});
+  final VoidCallback? onToggleDeck;
+
+  const BrowserView({super.key, this.onToggleDeck});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -74,7 +77,7 @@ class BrowserView extends ConsumerWidget {
                 Webview(
                   controller,
                   permissionRequested: (url, permissionKind, isUserInitiated) =>
-                      _onPermissionRequested(url, permissionKind, isUserInitiated),
+                      _onPermissionRequested(context, url, permissionKind, isUserInitiated),
                 ),
                 if (activeTab.isLoading)
                   const Positioned(
@@ -87,6 +90,8 @@ class BrowserView extends ConsumerWidget {
                       color: AppTheme.accentCyan,
                     ),
                   ),
+                // Modern Floating Sniffer Hub
+                FloatingSnifferHub(onToggleDeck: onToggleDeck),
               ],
             ),
           );
@@ -95,11 +100,68 @@ class BrowserView extends ConsumerWidget {
     );
   }
 
+  /// Shows a dialog asking the user to allow or deny a WebView2 permission request.
   Future<WebviewPermissionDecision> _onPermissionRequested(
+    BuildContext context,
     String url,
     WebviewPermissionKind kind,
     bool isUserInitiated,
   ) async {
-    return WebviewPermissionDecision.allow;
+    // Only prompt for user-initiated permission requests (e.g. getUserMedia).
+    // Silent background requests (e.g. from ads) are denied automatically.
+    if (!isUserInitiated) return WebviewPermissionDecision.deny;
+
+    final kindLabel = switch (kind) {
+      WebviewPermissionKind.microphone => 'Microphone',
+      WebviewPermissionKind.camera => 'Camera',
+      WebviewPermissionKind.geoLocation => 'Location',
+      WebviewPermissionKind.notifications => 'Notifications',
+      _ => kind.name,
+    };
+
+    final decision = await showDialog<WebviewPermissionDecision>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.darkSurface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Row(
+          children: [
+            const Icon(Icons.security, color: AppTheme.accentAmber, size: 20),
+            const SizedBox(width: 8),
+            Text('Permission Request', style: const TextStyle(fontSize: 15, color: AppTheme.darkTextPrimary)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'A page is requesting access to your $kindLabel.',
+              style: const TextStyle(color: AppTheme.darkTextPrimary, fontSize: 13),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              url,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: AppTheme.darkTextSecondary, fontSize: 11),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            child: const Text('Deny', style: TextStyle(color: AppTheme.accentRose)),
+            onPressed: () => Navigator.of(ctx).pop(WebviewPermissionDecision.deny),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryColor),
+            child: const Text('Allow', style: TextStyle(color: Colors.white)),
+            onPressed: () => Navigator.of(ctx).pop(WebviewPermissionDecision.allow),
+          ),
+        ],
+      ),
+    );
+
+    return decision ?? WebviewPermissionDecision.deny;
   }
 }

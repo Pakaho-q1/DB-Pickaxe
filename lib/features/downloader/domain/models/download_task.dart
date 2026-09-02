@@ -16,6 +16,8 @@ class DownloadTask {
   final DateTime createdAt;
   final DateTime? completedAt;
   final int retryCount;
+  final bool isResumable;
+  final int chunkCount;
 
   const DownloadTask({
     required this.id,
@@ -33,6 +35,8 @@ class DownloadTask {
     required this.createdAt,
     this.completedAt,
     this.retryCount = 0,
+    this.isResumable = false,
+    this.chunkCount = 1,
   });
 
   double get progress {
@@ -56,6 +60,8 @@ class DownloadTask {
     DateTime? createdAt,
     DateTime? completedAt,
     int? retryCount,
+    bool? isResumable,
+    int? chunkCount,
   }) {
     return DownloadTask(
       id: id ?? this.id,
@@ -73,6 +79,8 @@ class DownloadTask {
       createdAt: createdAt ?? this.createdAt,
       completedAt: completedAt ?? this.completedAt,
       retryCount: retryCount ?? this.retryCount,
+      isResumable: isResumable ?? this.isResumable,
+      chunkCount: chunkCount ?? this.chunkCount,
     );
   }
 
@@ -83,8 +91,10 @@ class DownloadTask {
       'pageUrl': pageUrl,
       'filename': filename,
       'savedPath': savedPath,
-      'mediaType': mediaType.index,
-      'status': status.index,
+      // Store enum name (string) instead of index (int) to be resilient against
+      // future enum reordering that would otherwise corrupt stored data.
+      'mediaType': mediaType.name,
+      'status': status.name,
       'totalBytes': totalBytes,
       'downloadedBytes': downloadedBytes,
       'speedBytesPerSec': speedBytesPerSec,
@@ -93,18 +103,37 @@ class DownloadTask {
       'createdAt': createdAt.toIso8601String(),
       'completedAt': completedAt?.toIso8601String(),
       'retryCount': retryCount,
+      'isResumable': isResumable,
+      'chunkCount': chunkCount,
     };
   }
 
   factory DownloadTask.fromMap(Map<dynamic, dynamic> map) {
+    // Support both legacy int-index format and new string-name format for backward compatibility.
+    final rawMediaType = map['mediaType'];
+    final mediaType = rawMediaType is int
+        ? MediaType.values[rawMediaType.clamp(0, MediaType.values.length - 1)]
+        : MediaType.values.firstWhere(
+            (e) => e.name == rawMediaType,
+            orElse: () => MediaType.other,
+          );
+
+    final rawStatus = map['status'];
+    final status = rawStatus is int
+        ? DownloadStatus.values[rawStatus.clamp(0, DownloadStatus.values.length - 1)]
+        : DownloadStatus.values.firstWhere(
+            (e) => e.name == rawStatus,
+            orElse: () => DownloadStatus.pending,
+          );
+
     return DownloadTask(
       id: map['id'] as String,
       url: map['url'] as String,
       pageUrl: map['pageUrl'] as String? ?? '',
       filename: map['filename'] as String,
       savedPath: map['savedPath'] as String,
-      mediaType: MediaType.values[map['mediaType'] as int? ?? 0],
-      status: DownloadStatus.values[map['status'] as int? ?? 0],
+      mediaType: mediaType,
+      status: status,
       totalBytes: map['totalBytes'] as int? ?? 0,
       downloadedBytes: map['downloadedBytes'] as int? ?? 0,
       speedBytesPerSec: (map['speedBytesPerSec'] as num?)?.toDouble() ?? 0,
@@ -113,6 +142,8 @@ class DownloadTask {
       createdAt: DateTime.parse(map['createdAt'] as String),
       completedAt: map['completedAt'] != null ? DateTime.parse(map['completedAt'] as String) : null,
       retryCount: map['retryCount'] as int? ?? 0,
+      isResumable: map['isResumable'] as bool? ?? false,
+      chunkCount: map['chunkCount'] as int? ?? 1,
     );
   }
 }

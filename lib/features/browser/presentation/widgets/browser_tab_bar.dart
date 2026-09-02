@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/theme/app_theme.dart';
+import '../../domain/models/browser_tab.dart';
 import '../providers/browser_tabs_provider.dart';
 
 class BrowserTabBar extends ConsumerWidget {
@@ -12,122 +12,108 @@ class BrowserTabBar extends ConsumerWidget {
     final activeTabId = ref.watch(activeTabIdProvider);
 
     return Container(
-      height: 38,
-      color: const Color(0xFF070B12), // Deep header container
-      padding: const EdgeInsets.only(left: 6, right: 6, top: 3),
+      height: 42,
+      color: const Color(0xFF0B0F17),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       child: Row(
         children: [
           Expanded(
-            child: ListView(
+            child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
-              children: [
-                ...tabs.map((tab) {
-                  final isActive = tab.id == activeTabId;
-                  final titleText = tab.displayTitle;
-
-                  return GestureDetector(
-                    onTap: () {
-                      ref.read(activeTabIdProvider.notifier).state = tab.id;
-                    },
-                    child: Tooltip(
-                      message: tab.url.isNotEmpty ? tab.url : titleText,
-                      child: Container(
-                        width: 170,
-                        margin: const EdgeInsets.only(right: 3),
-                        padding: const EdgeInsets.symmetric(horizontal: 10),
-                        decoration: BoxDecoration(
-                          color: isActive ? const Color(0xFF22304A) : const Color(0xFF0F172A),
-                          borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-                          border: Border(
-                            top: BorderSide(
-                              color: isActive ? AppTheme.primaryLight : Colors.transparent,
-                              width: 3.0,
-                            ),
-                            left: BorderSide(
-                              color: isActive ? AppTheme.darkBorder : const Color(0xFF1E293B).withValues(alpha: 0.3),
-                              width: 1.0,
-                            ),
-                            right: BorderSide(
-                              color: isActive ? AppTheme.darkBorder : const Color(0xFF1E293B).withValues(alpha: 0.3),
-                              width: 1.0,
-                            ),
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            if (tab.isLoading)
-                              const SizedBox(
-                                width: 13,
-                                height: 13,
-                                child: CircularProgressIndicator(strokeWidth: 1.8, color: AppTheme.accentCyan),
-                              )
-                            else
-                              Icon(
-                                Icons.language,
-                                size: 15,
-                                color: isActive ? AppTheme.accentCyan : const Color(0xFF64748B),
-                              ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                titleText,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: isActive ? FontWeight.bold : FontWeight.w500,
-                                  color: isActive ? Colors.white : const Color(0xFF94A3B8),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            InkWell(
-                              borderRadius: BorderRadius.circular(10),
-                              onTap: () {
-                                ref.read(browserTabsProvider.notifier).closeTab(tab.id);
-                              },
-                              child: Padding(
-                                padding: const EdgeInsets.all(2.0),
-                                child: Icon(
-                                  Icons.close,
-                                  size: 14,
-                                  color: isActive ? Colors.white : const Color(0xFF64748B),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  );
-                }),
-                // Standard "+" New Tab Button right next to the last tab
-                Padding(
-                  padding: const EdgeInsets.only(left: 3, bottom: 2),
-                  child: InkWell(
+              child: Row(
+                children: [
+                  for (int i = 0; i < tabs.length; i++) ...[
+                    _buildTabItem(context, ref, tabs[i], i + 1, tabs[i].id == activeTabId),
+                    const SizedBox(width: 6),
+                  ],
+                  // "+" New Tab Button
+                  InkWell(
                     borderRadius: BorderRadius.circular(6),
                     onTap: () {
                       ref.read(browserTabsProvider.notifier).createTab();
                     },
                     child: Container(
-                      width: 30,
-                      height: 30,
+                      width: 32,
+                      height: 32,
                       decoration: BoxDecoration(
-                        color: const Color(0xFF0F172A),
+                        color: const Color(0xFF1E293B),
                         borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: AppTheme.darkBorder.withValues(alpha: 0.6)),
+                        border: Border.all(color: const Color(0xFF334155)),
                       ),
                       child: const Center(
-                        child: Icon(Icons.add, size: 16, color: AppTheme.darkTextPrimary),
+                        child: Icon(Icons.add, size: 18, color: Colors.white),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ],
       ),
     );
   }
+
+  Widget _buildTabItem(BuildContext context, WidgetRef ref, BrowserTab tab, int index, bool isActive) {
+    final titleText = tab.getTitle(index);
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(6),
+      onTap: () {
+        ref.read(activeTabIdProvider.notifier).state = tab.id;
+      },
+      child: Container(
+        height: 32,
+        constraints: const BoxConstraints(minWidth: 120, maxWidth: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: isActive ? const Color(0xFF2563EB) : const Color(0xFF1E293B),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isActive ? const Color(0xFF60A5FA) : const Color(0xFF334155),
+            width: isActive ? 1.5 : 1.0,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.tab,
+              size: 15,
+              color: Colors.white,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                titleText,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            InkWell(
+              borderRadius: BorderRadius.circular(4),
+              onTap: () {
+                ref.read(browserTabsProvider.notifier).closeTab(tab.id);
+              },
+              child: const Padding(
+                padding: EdgeInsets.all(2),
+                child: Icon(
+                  Icons.close,
+                  size: 14,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
+

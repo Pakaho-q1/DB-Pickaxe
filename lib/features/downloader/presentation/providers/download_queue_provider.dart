@@ -5,6 +5,7 @@ import '../../../../core/storage/hive_service.dart';
 import '../../../settings/presentation/providers/settings_provider.dart';
 import '../../../sniffer/domain/models/detected_media.dart';
 import '../../domain/models/download_task.dart';
+import '../../services/chunked_downloader_service.dart';
 import '../../services/download_queue_manager.dart';
 
 final downloadQueueProvider = StateNotifierProvider<DownloadQueueNotifier, List<DownloadTask>>((ref) {
@@ -101,6 +102,7 @@ class DownloadQueueNotifier extends StateNotifier<List<DownloadTask>> {
 
   Future<void> removeTask(String taskId) async {
     _queueManager.cancelTask(taskId);
+    await ChunkedDownloaderService.deleteTaskTempFolder(taskId);
     await HiveService.deleteDownloadTask(taskId);
     state = state.where((t) => t.id != taskId).toList();
   }
@@ -108,6 +110,7 @@ class DownloadQueueNotifier extends StateNotifier<List<DownloadTask>> {
   Future<void> clearCompleted() async {
     final completed = state.where((t) => t.status == DownloadStatus.completed).toList();
     for (var task in completed) {
+      await ChunkedDownloaderService.deleteTaskTempFolder(task.id);
       await HiveService.deleteDownloadTask(task.id);
     }
     state = state.where((t) => t.status != DownloadStatus.completed).toList();
