@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../../features/settings/domain/models/app_settings.dart';
 import '../constants/app_constants.dart';
 import 'cookie_manager_service.dart';
+import 'local_doh_proxy_service.dart';
 
 class DioClient {
   static Dio createDio(
@@ -42,7 +43,7 @@ class DioClient {
     };
     dio.options.headers = headers;
 
-    // Apply Proxy if enabled
+    // Apply Proxy if enabled, or route via embedded Local DoH Proxy
     dio.httpClientAdapter = IOHttpClientAdapter(
       createHttpClient: () {
         final client = HttpClient();
@@ -60,6 +61,10 @@ class DioClient {
               HttpClientBasicCredentials(settings.proxyUsername, settings.proxyPassword),
             );
           }
+        } else if (LocalDohProxyService.isRunning) {
+          client.findProxy = (uri) {
+            return 'PROXY 127.0.0.1:${LocalDohProxyService.port}';
+          };
         }
 
         // In debug mode only, allow self-signed/invalid certificates for local dev servers.

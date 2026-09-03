@@ -41,6 +41,11 @@ class DownloadTaskTile extends ConsumerWidget {
         statusBadgeText = 'COMPLETED';
         statusIcon = Icons.check_circle_outline;
         break;
+      case DownloadStatus.expired:
+        statusColor = AppTheme.accentAmber;
+        statusBadgeText = 'EXPIRED (403)';
+        statusIcon = Icons.link_off;
+        break;
       case DownloadStatus.failed:
         statusColor = AppTheme.accentRose;
         statusBadgeText = 'FAILED';

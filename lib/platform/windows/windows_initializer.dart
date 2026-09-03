@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_windows/webview_windows.dart';
 import 'package:window_manager/window_manager.dart';
+import '../../core/network/local_doh_proxy_service.dart';
 import '../../core/storage/cache_paths.dart';
 
 class WindowsInitializer {
@@ -11,10 +12,23 @@ class WindowsInitializer {
 
   static Future<void> init() async {
     if (Platform.isWindows) {
-      // 1. Initialize WebView2 with dedicated UserDataPath inside .pickaxe-cache/webview
+      final proxyArg = LocalDohProxyService.isRunning
+          ? '--proxy-server="127.0.0.1:${LocalDohProxyService.port}" --proxy-bypass-list="<-loopback>" '
+          : '';
+
+      // Initialize WebView2 with dedicated UserDataPath inside .pickaxe-cache/webview
       try {
         await WebviewController.initializeEnvironment(
           userDataPath: CachePaths.webviewDir.path,
+          additionalArguments:
+              '$proxyArg'
+              '--disable-web-security '
+              '--disable-blink-features=AutomationControlled '
+              '--user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 Edg/128.0.0.0" '
+              '--enable-features=NetworkServiceInProcess '
+              '--disable-site-isolation-trials '
+              '--ignore-certificate-errors '
+              '--allow-running-insecure-content',
         );
       } on PlatformException catch (e) {
         if (e.code == 'environment_already_initialized') {

@@ -1,9 +1,12 @@
-import '../../../../core/constants/app_constants.dart';
+﻿import '../../../../core/constants/app_constants.dart';
 
 class DownloadTask {
   final String id;
   final String url;
+  final String? audioUrl; // For separate DASH audio stream pairing
   final String pageUrl;
+  final String? pageTitle; // For smart filename / subfolder organization
+  final String? subFolder; // Subfolder path inside download directory
   final String filename;
   final String savedPath;
   final MediaType mediaType;
@@ -18,11 +21,17 @@ class DownloadTask {
   final int retryCount;
   final bool isResumable;
   final int chunkCount;
+  final double? trimStartTime; // In seconds (for video trimming)
+  final double? trimEndTime; // In seconds (for video trimming)
+  final bool isAudioOnly; // Extract audio only (.mp3)
 
   const DownloadTask({
     required this.id,
     required this.url,
+    this.audioUrl,
     required this.pageUrl,
+    this.pageTitle,
+    this.subFolder,
     required this.filename,
     required this.savedPath,
     required this.mediaType,
@@ -37,6 +46,9 @@ class DownloadTask {
     this.retryCount = 0,
     this.isResumable = false,
     this.chunkCount = 1,
+    this.trimStartTime,
+    this.trimEndTime,
+    this.isAudioOnly = false,
   });
 
   double get progress {
@@ -44,10 +56,16 @@ class DownloadTask {
     return (downloadedBytes / totalBytes).clamp(0.0, 1.0);
   }
 
+  bool get isExpired => status == DownloadStatus.expired;
+
   DownloadTask copyWith({
     String? id,
     String? url,
+    String? audioUrl,
+    bool clearAudioUrl = false,
     String? pageUrl,
+    String? pageTitle,
+    String? subFolder,
     String? filename,
     String? savedPath,
     MediaType? mediaType,
@@ -62,11 +80,17 @@ class DownloadTask {
     int? retryCount,
     bool? isResumable,
     int? chunkCount,
+    double? trimStartTime,
+    double? trimEndTime,
+    bool? isAudioOnly,
   }) {
     return DownloadTask(
       id: id ?? this.id,
       url: url ?? this.url,
+      audioUrl: clearAudioUrl ? null : (audioUrl ?? this.audioUrl),
       pageUrl: pageUrl ?? this.pageUrl,
+      pageTitle: pageTitle ?? this.pageTitle,
+      subFolder: subFolder ?? this.subFolder,
       filename: filename ?? this.filename,
       savedPath: savedPath ?? this.savedPath,
       mediaType: mediaType ?? this.mediaType,
@@ -81,6 +105,9 @@ class DownloadTask {
       retryCount: retryCount ?? this.retryCount,
       isResumable: isResumable ?? this.isResumable,
       chunkCount: chunkCount ?? this.chunkCount,
+      trimStartTime: trimStartTime ?? this.trimStartTime,
+      trimEndTime: trimEndTime ?? this.trimEndTime,
+      isAudioOnly: isAudioOnly ?? this.isAudioOnly,
     );
   }
 
@@ -88,11 +115,12 @@ class DownloadTask {
     return {
       'id': id,
       'url': url,
+      'audioUrl': audioUrl,
       'pageUrl': pageUrl,
+      'pageTitle': pageTitle,
+      'subFolder': subFolder,
       'filename': filename,
       'savedPath': savedPath,
-      // Store enum name (string) instead of index (int) to be resilient against
-      // future enum reordering that would otherwise corrupt stored data.
       'mediaType': mediaType.name,
       'status': status.name,
       'totalBytes': totalBytes,
@@ -105,11 +133,13 @@ class DownloadTask {
       'retryCount': retryCount,
       'isResumable': isResumable,
       'chunkCount': chunkCount,
+      'trimStartTime': trimStartTime,
+      'trimEndTime': trimEndTime,
+      'isAudioOnly': isAudioOnly,
     };
   }
 
   factory DownloadTask.fromMap(Map<dynamic, dynamic> map) {
-    // Support both legacy int-index format and new string-name format for backward compatibility.
     final rawMediaType = map['mediaType'];
     final mediaType = rawMediaType is int
         ? MediaType.values[rawMediaType.clamp(0, MediaType.values.length - 1)]
@@ -129,7 +159,10 @@ class DownloadTask {
     return DownloadTask(
       id: map['id'] as String,
       url: map['url'] as String,
+      audioUrl: map['audioUrl'] as String?,
       pageUrl: map['pageUrl'] as String? ?? '',
+      pageTitle: map['pageTitle'] as String?,
+      subFolder: map['subFolder'] as String?,
       filename: map['filename'] as String,
       savedPath: map['savedPath'] as String,
       mediaType: mediaType,
@@ -144,6 +177,9 @@ class DownloadTask {
       retryCount: map['retryCount'] as int? ?? 0,
       isResumable: map['isResumable'] as bool? ?? false,
       chunkCount: map['chunkCount'] as int? ?? 1,
+      trimStartTime: (map['trimStartTime'] as num?)?.toDouble(),
+      trimEndTime: (map['trimEndTime'] as num?)?.toDouble(),
+      isAudioOnly: map['isAudioOnly'] as bool? ?? false,
     );
   }
 }

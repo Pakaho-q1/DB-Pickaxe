@@ -33,4 +33,8 @@ class Formatters {
     }
     return '$minutes:$seconds';
   }
+
+  static String formatSeconds(int seconds) {
+    return formatDuration(Duration(seconds: seconds));
+  }
 }

@@ -1,8 +1,11 @@
 import 'dart:convert';
+import 'package:cached_network_image_ce/cached_network_image.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/constants/app_constants.dart';
+import '../../../../core/network/cookie_manager_service.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/utils/media_type_helper.dart';
@@ -11,10 +14,26 @@ import '../../domain/models/detected_media.dart';
 import '../providers/sniffer_provider.dart';
 import 'media_preview_dialog.dart';
 
+// Top-level for compute() isolate
+Uint8List _base64DecodeIsolate(String src) => base64Decode(src);
+
 class MediaCard extends ConsumerWidget {
   final DetectedMedia media;
+  final int variantCount;
 
-  const MediaCard({super.key, required this.media});
+  const MediaCard({
+    super.key,
+    required this.media,
+    this.variantCount = 0,
+  });
+
+  String _formatResolutionBadge(String res) {
+    if (res.contains('3840') || res.contains('2160')) return '4K $res';
+    if (res.contains('2560') || res.contains('1440')) return '2K $res';
+    if (res.contains('1920') || res.contains('1080')) return 'FHD $res';
+    if (res.contains('1280') || res.contains('720')) return 'HD $res';
+    return res;
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -55,24 +74,54 @@ class MediaCard extends ConsumerWidget {
                     fit: StackFit.expand,
                     children: [
                       _buildThumbnailView(typeIcon, badgeColor),
-                      // Top Left Badge: Format
+                      // Top Left Badge: Format & Variant Count (+N)
                       Positioned(
                         top: 4,
                         left: 4,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: badgeColor,
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            media.extension.toUpperCase().replaceAll('.', ''),
-                            style: const TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: badgeColor,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                media.extension.toUpperCase().replaceAll('.', ''),
+                                style: const TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
                             ),
-                          ),
+                            if (variantCount > 0) ...[
+                              const SizedBox(width: 4),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.accentCyan,
+                                  borderRadius: BorderRadius.circular(4),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                      color: Colors.black45,
+                                      blurRadius: 4,
+                                      offset: Offset(0, 1),
+                                    ),
+                                  ],
+                                ),
+                                child: Text(
+                                  '(+$variantCount)',
+                                  style: const TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.black,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
                       // Top Right: Checkbox
@@ -88,20 +137,25 @@ class MediaCard extends ConsumerWidget {
                           },
                         ),
                       ),
-                      // Bottom resolution tag
-                      if (media.resolution != null)
+                      // Bottom Right Resolution Badge
+                      if (media.resolution != null && media.resolution!.isNotEmpty)
                         Positioned(
                           bottom: 4,
                           right: 4,
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                             decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.75),
-                              borderRadius: BorderRadius.circular(3),
+                              color: Colors.black.withValues(alpha: 0.80),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: Colors.white12),
                             ),
                             child: Text(
-                              media.resolution!,
-                              style: const TextStyle(fontSize: 8, color: Colors.white),
+                              _formatResolutionBadge(media.resolution!),
+                              style: const TextStyle(
+                                fontSize: 8.5,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
                             ),
                           ),
                         ),
@@ -132,7 +186,11 @@ class MediaCard extends ConsumerWidget {
                       media.filename,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.darkTextPrimary),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.darkTextPrimary,
+                      ),
                     ),
                     const SizedBox(height: 2),
                     Row(
@@ -141,7 +199,9 @@ class MediaCard extends ConsumerWidget {
                         Text(
                           media.sizeBytes > 0
                               ? Formatters.formatBytes(media.sizeBytes)
-                              : (media.mediaType == MediaType.stream ? 'Stream' : 'Ready'),
+                              : (media.mediaType == MediaType.stream
+                                  ? 'Stream'
+                                  : (media.resolution != null ? media.resolution! : 'Probing...')),
                           style: const TextStyle(fontSize: 9, color: AppTheme.darkTextSecondary),
                         ),
                         Row(
@@ -156,6 +216,24 @@ class MediaCard extends ConsumerWidget {
                               child: const Icon(Icons.copy, size: 13, color: AppTheme.darkTextSecondary),
                             ),
                             const SizedBox(width: 6),
+                            if (media.mediaType == MediaType.video || media.mediaType == MediaType.stream) ...[
+                              Tooltip(
+                                message: 'Extract Audio Only (.mp3)',
+                                child: InkWell(
+                                  onTap: () {
+                                  ref.read(downloadQueueProvider.notifier).addAudioOnlyToQueue(media);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Audio Queued: ${media.filename} (.mp3)'),
+                                      duration: const Duration(seconds: 1),
+                                    ),
+                                  );
+                                },
+                                  child: const Icon(Icons.music_note, size: 14, color: AppTheme.accentCyan),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                            ],
                             InkWell(
                               onTap: () {
                                 ref.read(downloadQueueProvider.notifier).addMediaToQueue(media);
@@ -182,42 +260,101 @@ class MediaCard extends ConsumerWidget {
     );
   }
 
-  Widget _buildThumbnailView(IconData fallbackIcon, Color fallbackColor) {
-    if (media.thumbnailUrl != null && media.thumbnailUrl!.isNotEmpty) {
-      if (media.thumbnailUrl!.startsWith('data:image')) {
-        try {
-          final base64Str = media.thumbnailUrl!.split(',').last;
-          final bytes = base64Decode(base64Str);
+  bool _isRenderableScheme(String url) {
+    if (url.startsWith('data:image')) return true;
+    final uri = Uri.tryParse(url);
+    if (uri == null) return false;
+    return uri.scheme == 'http' || uri.scheme == 'https';
+  }
+
+  Map<String, String> _thumbHeaders(String imageUrl) {
+    final headers = <String, String>{};
+    if (media.pageUrl.isNotEmpty) headers['Referer'] = media.pageUrl;
+    final cookie = CookieManagerService.getCookieHeaderForUrl(imageUrl);
+    if (cookie != null && cookie.isNotEmpty) headers['Cookie'] = cookie;
+    return headers;
+  }
+
+  Widget _buildCachedThumb(String url, IconData fallbackIcon, Color fallbackColor) {
+    return CachedNetworkImage(
+      imageUrl: url,
+      httpHeaders: _thumbHeaders(url),
+      memCacheWidth: 320,
+      memCacheHeight: 320,
+      filterQuality: FilterQuality.low,
+      fit: BoxFit.cover,
+      placeholder: (context, _) => Container(
+        color: AppTheme.darkBackground,
+        child: const Center(
+          child: SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      ),
+      errorBuilder: (context, _, stackTrace) => _buildFallback(fallbackIcon, fallbackColor),
+      fadeInDuration: const Duration(milliseconds: 150),
+      fadeOutDuration: const Duration(milliseconds: 100),
+    );
+  }
+
+  Widget _buildDataThumb(String dataUri, IconData fallbackIcon, Color fallbackColor) {
+    final commaIdx = dataUri.indexOf(',');
+    if (commaIdx == -1) return _buildFallback(fallbackIcon, fallbackColor);
+    final base64Str = dataUri.substring(commaIdx + 1);
+    if (base64Str.length > 350 * 1024) {
+      return _buildFallback(fallbackIcon, fallbackColor);
+    }
+    return FutureBuilder<Uint8List>(
+      future: compute(_base64DecodeIsolate, base64Str),
+      builder: (context, snap) {
+        if (snap.hasData) {
           return Image.memory(
-            bytes,
+            snap.data!,
             cacheWidth: 320,
             cacheHeight: 320,
             filterQuality: FilterQuality.low,
             fit: BoxFit.cover,
-            errorBuilder: (context, error, stackTrace) => _buildFallback(fallbackIcon, fallbackColor),
+            errorBuilder: (context, _, stackTrace) => _buildFallback(fallbackIcon, fallbackColor),
           );
-        } catch (_) {}
-      } else {
-        return Image.network(
-          media.thumbnailUrl!,
-          cacheWidth: 320,
-          cacheHeight: 320,
-          filterQuality: FilterQuality.low,
-          fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) => _buildFallback(fallbackIcon, fallbackColor),
+        }
+        if (snap.hasError) return _buildFallback(fallbackIcon, fallbackColor);
+        return Container(
+          color: AppTheme.darkBackground,
+          child: const Center(
+            child: SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
         );
+      },
+    );
+  }
+
+  Widget _buildThumbnailView(IconData fallbackIcon, Color fallbackColor) {
+    final thumb = media.thumbnailUrl;
+
+    if (thumb != null && thumb.isNotEmpty) {
+      if (thumb.startsWith('data:image')) {
+        return _buildDataThumb(thumb, fallbackIcon, fallbackColor);
       }
+      if (!_isRenderableScheme(thumb)) {
+        return _buildFallback(fallbackIcon, fallbackColor);
+      }
+      return _buildCachedThumb(thumb, fallbackIcon, fallbackColor);
     }
 
     if (media.mediaType == MediaType.image) {
-      return Image.network(
-        media.url,
-        cacheWidth: 320,
-        cacheHeight: 320,
-        filterQuality: FilterQuality.low,
-        fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) => _buildFallback(fallbackIcon, fallbackColor),
-      );
+      if (media.url.startsWith('data:image')) {
+        return _buildDataThumb(media.url, fallbackIcon, fallbackColor);
+      }
+      if (!_isRenderableScheme(media.url)) {
+        return _buildFallback(fallbackIcon, fallbackColor);
+      }
+      return _buildCachedThumb(media.url, fallbackIcon, fallbackColor);
     }
 
     return _buildFallback(fallbackIcon, fallbackColor);

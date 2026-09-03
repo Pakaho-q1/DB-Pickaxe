@@ -22,6 +22,7 @@ enum DownloadStatus {
   failed,
   converting,
   cancelled,
+  expired,
 }
 
 enum AppStartupBehavior {
@@ -51,6 +52,8 @@ class AppConstants {
   static const String appVersion = '1.0.0';
   static const String defaultUserAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+  static const String mobileUserAgent =
+      'Mozilla/5.0 (Linux; Android 14; Mobile; rv:128.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36';
   static const String defaultHomePage = 'https://www.google.com';
 }
 
@@ -71,22 +74,15 @@ class DnsPreset {
 
   static const List<DnsPreset> presets = [
     DnsPreset(
-      name: 'System Default',
-      description: 'Use OS default DNS settings',
-      primaryDns: '',
-      secondaryDns: '',
-      dohUrl: '',
-    ),
-    DnsPreset(
       name: 'Cloudflare (1.1.1.1)',
-      description: 'Fastest privacy-first DNS',
+      description: 'Fastest privacy-first DoH (Bypasses ISP Blocking)',
       primaryDns: '1.1.1.1',
       secondaryDns: '1.0.0.1',
       dohUrl: 'https://cloudflare-dns.com/dns-query',
     ),
     DnsPreset(
-      name: 'Google Public DNS',
-      description: 'Reliable and globally distributed',
+      name: 'Google Public DNS (8.8.8.8)',
+      description: 'Reliable & globally distributed DoH',
       primaryDns: '8.8.8.8',
       secondaryDns: '8.8.4.4',
       dohUrl: 'https://dns.google/dns-query',
@@ -104,6 +100,13 @@ class DnsPreset {
       primaryDns: '9.9.9.9',
       secondaryDns: '149.112.112.112',
       dohUrl: 'https://dns.quad9.net/dns-query',
+    ),
+    DnsPreset(
+      name: 'System Default',
+      description: 'Use OS default DNS (May be censored by ISP)',
+      primaryDns: '',
+      secondaryDns: '',
+      dohUrl: '',
     ),
     DnsPreset(
       name: 'Custom DNS / DoH',

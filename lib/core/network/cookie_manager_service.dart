@@ -1,4 +1,4 @@
-import 'package:webview_windows/webview_windows.dart';
+﻿import 'package:webview_windows/webview_windows.dart';
 import '../storage/hive_service.dart';
 
 class CookieManagerService {
@@ -13,7 +13,7 @@ class CookieManagerService {
 
     // 2. Inject into WebView document session via JS.
     // Cookie value is escaped to prevent JS injection (single/double quotes in cookie values
-    // would otherwise break out of the JS string literal → XSS vector).
+    // would otherwise break out of the JS string literal -> XSS vector).
     final pairs = cookieString.split(';');
     for (final pair in pairs) {
       final trimmed = pair.trim();
@@ -47,5 +47,27 @@ class CookieManagerService {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Resolve complete headers (Referer, Cookie) for any target URL and optional parent page URL
+  static Map<String, String> getHeadersForUrl(
+    String url, {
+    String? pageUrl,
+    Map<String, String>? customHeaders,
+  }) {
+    final headers = <String, String>{};
+    if (customHeaders != null) {
+      headers.addAll(customHeaders);
+    }
+    if (pageUrl != null && pageUrl.isNotEmpty && !headers.containsKey('Referer')) {
+      headers['Referer'] = pageUrl;
+    }
+    if (!headers.containsKey('Cookie')) {
+      final cookie = getCookieHeaderForUrl(url) ?? (pageUrl != null ? getCookieHeaderForUrl(pageUrl) : null);
+      if (cookie != null && cookie.isNotEmpty) {
+        headers['Cookie'] = cookie;
+      }
+    }
+    return headers;
   }
 }

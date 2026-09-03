@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
@@ -66,6 +66,7 @@ class ChunkedDownloaderService {
   }) async {
     final dio = DioClient.createDio(
       settings,
+      targetUrl: url,
       refererUrl: refererUrl,
       customHeaders: customHeaders,
     );
@@ -365,6 +366,7 @@ class ChunkedDownloaderService {
   }) async {
     final dio = DioClient.createDio(
       settings,
+      targetUrl: url,
       refererUrl: refererUrl,
       customHeaders: customHeaders,
     );
@@ -438,6 +440,7 @@ class ChunkedDownloaderService {
   }) async {
     final dio = DioClient.createDio(
       settings,
+      targetUrl: url,
       refererUrl: refererUrl,
       customHeaders: customHeaders,
     );
@@ -542,3 +545,4 @@ class ChunkedDownloaderService {
     }
   }
 }
+

@@ -1,19 +1,16 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import 'package:webview_windows/webview_windows.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/network/cookie_manager_service.dart';
+import '../../../../core/policy/platform_capabilities.dart';
 import '../../../../core/storage/hive_service.dart';
-import '../../../downloader/presentation/providers/download_queue_provider.dart';
 import '../../../settings/presentation/providers/settings_provider.dart';
-import '../../../sniffer/domain/models/detected_media.dart';
 import '../../../sniffer/presentation/providers/sniffer_provider.dart';
-import '../../../sniffer/services/js_sniffer_scripts.dart';
 import '../../domain/models/browser_tab.dart';
-import 'history_provider.dart';
+import '../../services/unified_browser_bridge.dart';
 
 final activeTabIdProvider = StateProvider<String>((ref) => '');
 
@@ -109,8 +106,23 @@ class BrowserTabsNotifier extends StateNotifier<List<BrowserTab>> {
 
   Future<void> createTab({String url = AppConstants.defaultHomePage}) async {
     final tabId = const Uuid().v4();
-    final controller = WebviewController();
 
+    // On Mobile: pure BrowserTab without Windows WebView2
+    if (PlatformCapabilities.isMobile) {
+      final newTab = BrowserTab(
+        id: tabId,
+        url: url,
+        title: 'New Tab',
+        isLoading: false,
+      );
+      state = [...state, newTab];
+      ref.read(activeTabIdProvider.notifier).state = tabId;
+      _persistSession();
+      return;
+    }
+
+    // On Desktop (Windows): Initialize WebviewController
+    final controller = WebviewController();
     final newTab = BrowserTab(
       id: tabId,
       url: url,
@@ -126,66 +138,82 @@ class BrowserTabsNotifier extends StateNotifier<List<BrowserTab>> {
 
     try {
       await controller.initialize();
-      await controller.setUserAgent(AppConstants.defaultUserAgent);
+      await controller.setUserAgent(PlatformCapabilities.defaultUserAgent);
       await controller.setBackgroundColor(const Color(0xFF0F172A));
-
-      // Prevent popup ads from opening separate external windows
       await controller.setPopupWindowPolicy(WebviewPopupWindowPolicy.sameWindow);
 
-      // Store all subscriptions so they can be cancelled on tab close.
+      // Store subscriptions for Windows WebView
       _tabSubscriptions[tabId] = [
-        // Listen to postMessage from Injected JS
+        // 1. PostMessage from Injected JS -> Unified SSOT Bridge
         controller.webMessage.listen((message) {
-          _handleWebMessage(message, tabId);
+          UnifiedBrowserBridge.handleWebMessage(
+            ref: ref,
+            tabId: tabId,
+            rawMessage: message,
+          );
         }),
 
-        // Listen to URL updates
+        // 2. URL changes -> Unified SSOT Bridge
         controller.url.listen((currentUrl) {
           if (currentUrl.isNotEmpty) {
-            _updateTab(tabId, url: currentUrl);
+            UnifiedBrowserBridge.onPageLoadStarted(
+              ref: ref,
+              tabId: tabId,
+              url: currentUrl,
+            );
           }
         }),
 
-        // Listen to Title updates
+        // 3. Title updates -> Unified SSOT Bridge
         controller.title.listen((title) {
-          final cleanTitle = title.trim();
-          if (cleanTitle.isNotEmpty) {
-            _updateTab(tabId, title: cleanTitle);
-            final tab = state.firstWhere((t) => t.id == tabId, orElse: () => BrowserTab(id: tabId));
-            if (tab.url.isNotEmpty) {
-              ref.read(historyProvider.notifier).recordVisit(title: cleanTitle, url: tab.url);
-            }
-          }
+          final tab = state.firstWhere((t) => t.id == tabId, orElse: () => BrowserTab(id: tabId));
+          UnifiedBrowserBridge.onPageLoadFinished(
+            ref: ref,
+            tabId: tabId,
+            url: tab.url,
+            title: title.trim(),
+          );
         }),
 
-        // Listen to Loading state
+        // 4. Loading state updates
         controller.loadingState.listen((stateEnum) async {
           final isLoading = stateEnum == LoadingState.loading;
-          _updateTab(tabId, isLoading: isLoading);
+          final tab = state.firstWhere((t) => t.id == tabId, orElse: () => BrowserTab(id: tabId));
 
           if (isLoading) {
-            final keepMedia = ref.read(keepMediaAcrossPagesProvider);
-            if (!keepMedia) {
-              ref.read(snifferProvider.notifier).clearTabMedia(tabId);
-            }
+            UnifiedBrowserBridge.onPageLoadStarted(
+              ref: ref,
+              tabId: tabId,
+              url: tab.url,
+            );
           } else if (stateEnum == LoadingState.navigationCompleted) {
             final isAuto = ref.read(isAutoDetectEnabledProvider);
             if (isAuto) {
-              await controller.executeScript(JsSnifferScripts.snifferPayload);
+              final settings = HiveService.getSettings();
+              final script = UnifiedBrowserBridge.getInjectedSnifferScript(
+                enableAutoScroll: settings.enableAutoScroll,
+                enableAutoVideoTrigger: settings.enableAutoVideoTrigger,
+              );
+              await controller.executeScript(script);
             }
 
             // Auto-sync page cookies to Cookie Vault
             try {
               final cookieRaw = await controller.executeScript('document.cookie');
               if (cookieRaw != null && cookieRaw is String && cookieRaw.isNotEmpty) {
-                final tab = state.firstWhere((t) => t.id == tabId, orElse: () => BrowserTab(id: tabId));
                 await CookieManagerService.syncCookiesFromPage(tab.url, cookieRaw);
               }
             } catch (_) {}
+
+            UnifiedBrowserBridge.onPageLoadFinished(
+              ref: ref,
+              tabId: tabId,
+              url: tab.url,
+              title: tab.title,
+            );
           }
         }),
 
-        // Listen to Error state
         controller.onLoadError.listen((error) {
           _updateTab(tabId, isLoading: false);
         }),
@@ -193,7 +221,7 @@ class BrowserTabsNotifier extends StateNotifier<List<BrowserTab>> {
 
       await controller.loadUrl(url);
 
-      // Safety timer: Never allow tab to remain stuck in isLoading state
+      // Safety timeout
       Future.delayed(const Duration(seconds: 5), () {
         final current = state.firstWhere((t) => t.id == tabId, orElse: () => BrowserTab(id: tabId));
         if (current.isLoading) {
@@ -205,113 +233,29 @@ class BrowserTabsNotifier extends StateNotifier<List<BrowserTab>> {
     }
   }
 
-  void _handleWebMessage(dynamic message, String tabId) {
-    try {
-      final Map<String, dynamic> data = jsonDecode(message.toString());
-      final action = data['action'] as String? ?? '';
-
-      // SPA Navigation detected
-      if (action == 'PAGE_URL_CHANGED') {
-        final keepMedia = ref.read(keepMediaAcrossPagesProvider);
-        if (!keepMedia) {
-          ref.read(snifferProvider.notifier).clearTabMedia(tabId);
-        }
-        final newUrl = data['newUrl'] as String? ?? '';
-        if (newUrl.isNotEmpty) {
-          _updateTab(tabId, url: newUrl);
-        }
-        return;
-      }
-
-      // High-Performance Batched Media Delivery
-      if (action == 'MEDIA_BATCH_DETECTED') {
-        final rawItems = data['items'] as List<dynamic>? ?? [];
-        final items = rawItems.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-        ref.read(snifferProvider.notifier).addMediaBatch(
-              tabId: tabId,
-              items: items,
-            );
-        return;
-      }
-
-      if (action == 'MEDIA_DETECTED' || action == 'DIRECT_DOWNLOAD') {
-        final url = data['url'] as String? ?? '';
-        final pageUrl = data['pageUrl'] as String? ?? '';
-        final type = data['type'] as String? ?? 'other';
-        final title = data['title'] as String?;
-        final width = data['width'] as int? ?? 0;
-        final height = data['height'] as int? ?? 0;
-        final mime = data['mime'] as String?;
-        final thumbnailUrl = data['thumbnailUrl'] as String?;
-        final domIndex = data['domIndex'] as int? ?? 0;
-
-        ref.read(snifferProvider.notifier).addMedia(
-              tabId: tabId,
-              url: url,
-              pageUrl: pageUrl,
-              title: title,
-              typeStr: type,
-              width: width,
-              height: height,
-              mime: mime,
-              thumbnailUrl: thumbnailUrl,
-              domIndex: domIndex,
-            );
-
-        // If user clicked the floating download button or pressed Shift+D
-        if (action == 'DIRECT_DOWNLOAD') {
-          final mediaType = type == 'video'
-              ? MediaType.video
-              : type == 'stream'
-                  ? MediaType.stream
-                  : type == 'image'
-                      ? MediaType.image
-                      : type == 'audio'
-                          ? MediaType.audio
-                          : MediaType.other;
-
-          final ext = mediaType == MediaType.video || mediaType == MediaType.stream
-              ? '.mp4'
-              : mediaType == MediaType.image
-                  ? (url.toLowerCase().contains('.png')
-                      ? '.png'
-                      : url.toLowerCase().contains('.webp')
-                          ? '.webp'
-                          : url.toLowerCase().contains('.gif')
-                              ? '.gif'
-                              : '.jpg')
-                  : mediaType == MediaType.audio
-                      ? '.mp3'
-                      : '.dat';
-
-          var cleanTitle = (title != null && title.trim().isNotEmpty)
-              ? title.trim().replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
-              : 'downloaded_${mediaType.name}';
-
-          if (!cleanTitle.toLowerCase().endsWith(ext.toLowerCase())) {
-            cleanTitle = '$cleanTitle$ext';
-          }
-
-          final media = DetectedMedia(
-            id: const Uuid().v4(),
-            tabId: tabId,
-            url: url,
-            pageUrl: pageUrl,
-            filename: cleanTitle,
-            mediaType: mediaType,
-            extension: ext,
-            detectedAt: DateTime.now(),
-            thumbnailUrl: thumbnailUrl ?? (mediaType == MediaType.image ? url : null),
-            resolution: width > 0 && height > 0 ? '${width}x$height' : null,
-          );
-          ref.read(downloadQueueProvider.notifier).addMediaToQueue(media);
-        }
-      }
-    } catch (_) {}
+  void updateTabInfo(
+    String tabId, {
+    String? url,
+    String? title,
+    bool? isLoading,
+    bool? canGoBack,
+    bool? canGoForward,
+    double? progress,
+  }) {
+    _updateTab(
+      tabId,
+      url: url,
+      title: title,
+      isLoading: isLoading,
+      canGoBack: canGoBack,
+      canGoForward: canGoForward,
+      progress: progress,
+    );
+    _persistSession();
   }
 
   void _updateTab(
-    String id, {
+    String tabId, {
     String? title,
     String? url,
     bool? isLoading,
@@ -319,58 +263,62 @@ class BrowserTabsNotifier extends StateNotifier<List<BrowserTab>> {
     bool? canGoForward,
     double? progress,
   }) {
-    state = state.map((tab) {
-      if (tab.id == id) {
-        return tab.copyWith(
-          title: (title != null && title.trim().isNotEmpty) ? title.trim() : tab.title,
-          url: url ?? tab.url,
-          isLoading: isLoading ?? tab.isLoading,
-          canGoBack: canGoBack ?? tab.canGoBack,
-          canGoForward: canGoForward ?? tab.canGoForward,
-          progress: progress ?? tab.progress,
-        );
-      }
-      return tab;
-    }).toList();
-    _persistSession();
+    state = [
+      for (final tab in state)
+        if (tab.id == tabId)
+          tab.copyWith(
+            title: title,
+            url: url,
+            isLoading: isLoading,
+            canGoBack: canGoBack,
+            canGoForward: canGoForward,
+            progress: progress,
+          )
+        else
+          tab,
+    ];
   }
 
-  Future<void> rescanActiveTab() async {
-    final activeId = ref.read(activeTabIdProvider);
-    final activeTab = state.firstWhere((t) => t.id == activeId, orElse: () => const BrowserTab(id: ''));
-    if (activeTab.controller != null) {
-      ref.read(snifferProvider.notifier).clearTabMedia(activeId);
-      await activeTab.controller!.executeScript(JsSnifferScripts.snifferPayload);
-      await activeTab.controller!.executeScript('if (window.__dbPickaxeRescan) window.__dbPickaxeRescan();');
+  void selectTab(String tabId) {
+    if (state.any((t) => t.id == tabId)) {
+      ref.read(activeTabIdProvider.notifier).state = tabId;
+      _persistSession();
     }
   }
 
-  Future<void> navigateTo(String tabId, String urlString) async {
-    String formattedUrl = urlString.trim();
-    if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
-      final domainPattern = RegExp(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+(/.*)?$');
-      if (domainPattern.hasMatch(formattedUrl)) {
-        formattedUrl = 'https://$formattedUrl';
+  Future<void> navigateTo(String tabId, String targetUrl) async {
+    var finalUrl = targetUrl.trim();
+    if (finalUrl.isEmpty) return;
+
+    if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
+      if (finalUrl.contains('.') && !finalUrl.contains(' ')) {
+        finalUrl = 'https://$finalUrl';
       } else {
-        formattedUrl = 'https://www.google.com/search?q=${Uri.encodeComponent(formattedUrl)}';
+        finalUrl = 'https://www.google.com/search?q=${Uri.encodeComponent(finalUrl)}';
       }
     }
 
     final tab = state.firstWhere((t) => t.id == tabId, orElse: () => BrowserTab(id: tabId));
+    _updateTab(tabId, url: finalUrl, isLoading: true);
+    _persistSession();
+
     if (tab.controller != null) {
-      _updateTab(tabId, url: formattedUrl, isLoading: true);
-      await tab.controller!.loadUrl(formattedUrl);
+      await tab.controller?.loadUrl(finalUrl);
     }
   }
 
   Future<void> goBack(String tabId) async {
     final tab = state.firstWhere((t) => t.id == tabId, orElse: () => BrowserTab(id: tabId));
-    await tab.controller?.goBack();
+    if (tab.controller != null && tab.canGoBack) {
+      await tab.controller?.goBack();
+    }
   }
 
   Future<void> goForward(String tabId) async {
     final tab = state.firstWhere((t) => t.id == tabId, orElse: () => BrowserTab(id: tabId));
-    await tab.controller?.goForward();
+    if (tab.controller != null && tab.canGoForward) {
+      await tab.controller?.goForward();
+    }
   }
 
   Future<void> reload(String tabId) async {
@@ -422,5 +370,19 @@ class BrowserTabsNotifier extends StateNotifier<List<BrowserTab>> {
     state = state.where((t) => t.id == keepTabId).toList();
     ref.read(activeTabIdProvider.notifier).state = keepTabId;
     _persistSession();
+  }
+
+  Future<void> rescanActiveTab() async {
+    final activeTabId = ref.read(activeTabIdProvider);
+    if (activeTabId.isEmpty) return;
+    final tab = state.firstWhere((t) => t.id == activeTabId, orElse: () => BrowserTab(id: activeTabId));
+    final settings = HiveService.getSettings();
+    final script = UnifiedBrowserBridge.getInjectedSnifferScript(
+      enableAutoScroll: settings.enableAutoScroll,
+      enableAutoVideoTrigger: settings.enableAutoVideoTrigger,
+    );
+    if (tab.controller != null) {
+      await tab.controller?.executeScript(script);
+    }
   }
 }

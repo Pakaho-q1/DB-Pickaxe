@@ -23,7 +23,7 @@ class HiveService {
 
   static Future<void> init() async {
     // Ensure all .pickaxe-cache sub-directories exist before any path is accessed.
-    CachePaths.ensureDirectoriesExist();
+    await CachePaths.init();
 
     // Strictly isolate Hive database files inside .pickaxe-cache/database
     final dbDir = CachePaths.databaseDir;

@@ -1,6 +1,8 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../../../core/constants/app_constants.dart';
+import '../../../../core/network/dio_client.dart';
 import '../../../../core/storage/hive_service.dart';
 import '../../../browser/presentation/providers/browser_tabs_provider.dart';
 import '../../domain/models/detected_media.dart';
@@ -72,26 +74,48 @@ final filteredMediaProvider = Provider<List<DetectedMedia>>((ref) {
       if (!matchName && !matchUrl) return false;
     }
 
-    // 3. Min Size MB (0 = no filter)
-    if (filter.minSizeMB > 0) {
+    // 3. Min / Max Size Range (MB)
+    if (item.sizeBytes > 0) {
       final sizeMB = item.sizeBytes / (1024 * 1024);
-      if (item.sizeBytes > 0 && sizeMB < filter.minSizeMB) return false;
+      if (filter.minSizeMB > 0 && sizeMB < filter.minSizeMB) return false;
+      if (filter.maxSizeMB > 0 && sizeMB > filter.maxSizeMB) return false;
+    } else if (filter.minSizeMB > 0 && item.mediaType != MediaType.stream) {
+      // If minSize filter is active and item size is still 0 (probe pending), skip
+      return false;
     }
 
-    // 4. Max Size MB (0 = no filter)
-    if (filter.maxSizeMB > 0) {
-      final sizeMB = item.sizeBytes / (1024 * 1024);
-      if (item.sizeBytes > 0 && sizeMB > filter.maxSizeMB) return false;
-    }
-
-    // 5. Width / Height Filters (0 = no filter)
-    if (filter.minWidth > 0 || filter.minHeight > 0) {
+    // 4. Width / Height Range Filters (0 = no filter)
+    if (filter.minWidth > 0 || filter.maxWidth > 0 || filter.minHeight > 0 || filter.maxHeight > 0) {
       if (item.resolution != null && item.resolution!.contains('x')) {
         final parts = item.resolution!.split('x');
         final w = int.tryParse(parts[0]) ?? 0;
         final h = int.tryParse(parts[1]) ?? 0;
         if (filter.minWidth > 0 && w > 0 && w < filter.minWidth) return false;
+        if (filter.maxWidth > 0 && w > 0 && w > filter.maxWidth) return false;
         if (filter.minHeight > 0 && h > 0 && h < filter.minHeight) return false;
+        if (filter.maxHeight > 0 && h > 0 && h > filter.maxHeight) return false;
+      }
+    }
+
+    // 5. Quality Preset filter (UHD 4K, FHD 1080p, HD 720p, SD)
+    if (filter.qualityPreset != QualityPreset.all) {
+      final area = _groupedMediaArea(item);
+      final h = _extractHeight(item);
+      switch (filter.qualityPreset) {
+        case QualityPreset.uhd4k:
+          if (h < 2160 && area < 3840 * 2160) return false;
+          break;
+        case QualityPreset.fhd1080p:
+          if ((h < 1080 && area < 1920 * 1080) || h >= 2160 || area >= 3840 * 2160) return false;
+          break;
+        case QualityPreset.hd720p:
+          if ((h < 720 && area < 1280 * 720) || h >= 1080 || area >= 1920 * 1080) return false;
+          break;
+        case QualityPreset.sd:
+          if (h >= 720 || area >= 1280 * 720) return false;
+          break;
+        case QualityPreset.all:
+          break;
       }
     }
 
@@ -124,54 +148,281 @@ final filteredMediaProvider = Provider<List<DetectedMedia>>((ref) {
   return list;
 });
 
+int _extractHeight(DetectedMedia m) {
+  if (m.resolution != null && m.resolution!.contains('x')) {
+    final parts = m.resolution!.split('x');
+    final p1 = int.tryParse(parts[0]) ?? 0;
+    final p2 = int.tryParse(parts[1]) ?? 0;
+    return p1 < p2 ? p1 : p2;
+  }
+  return 0;
+}
+
+/// Identifies and filters out tiny byte-range chunks / partial segments
+/// e.g. 0.m4s, 18446744073709551615.m4s, init.m4s, segment-1.ts
+bool isJunkStreamSegment(String url) {
+  final clean = url.split('?').first.toLowerCase();
+  if (clean.endsWith('.m4s') ||
+      clean.endsWith('.mp4frag') ||
+      clean.endsWith('.cmfv') ||
+      clean.endsWith('.cmfa') ||
+      clean.endsWith('.init') ||
+      clean.endsWith('.m4f')) {
+    return true;
+  }
+  // Numbered ts chunk e.g. seg-1.ts, 12345.ts, chunk_0.ts
+  if (clean.endsWith('.ts') && RegExp(r'[-_0-9/](seg|segment|chunk|frag|part|video|audio)?[0-9]+\.ts$').hasMatch(clean)) {
+    return true;
+  }
+  return false;
+}
+
+/// Universal group key for media variants:
+/// Groups video resolution variants (4K, 1440p, 1080p, 720p, 360p) and image size variants (?w=, ?q=)
+/// into a single card per media entity.
+String mediaGroupKey(DetectedMedia m) {
+  final rawUrl = m.url;
+  try {
+    final uri = Uri.parse(rawUrl);
+    var path = uri.path.toLowerCase();
+
+    // 1. Remove file extension
+    final dot = path.lastIndexOf('.');
+    if (dot != -1) path = path.substring(0, dot);
+
+    // 2. Strip resolution/quality/density tokens:
+    path = path.replaceAll(RegExp(r'[-_](uhd|fhd|hd|sd|4k|2k|qhd|2160p|1440p|1080p|720p|540p|480p|360p|240p|\d+fps)'), '');
+    path = path.replaceAll(RegExp(r'[-_]\d+_\d+'), ''); // e.g. _1440_2560
+    path = path.replaceAll(RegExp(r'[-_]\d+x\d+'), ''); // e.g. _1440x2560
+    path = path.replaceAll(RegExp(r'[-_](large|medium|small|thumb|preview|original|highres|full)'), '');
+
+    return '${m.mediaType.name}:${uri.host}$path';
+  } catch (_) {
+    return '${m.mediaType.name}:${rawUrl.split('?').first.toLowerCase()}';
+  }
+}
+
+/// Legacy helper for test compatibility
+String imageGroupKey(String rawUrl) {
+  try {
+    final uri = Uri.parse(rawUrl);
+    return '${uri.scheme}://${uri.host}${uri.path}'.toLowerCase();
+  } catch (_) {
+    return rawUrl.split('?').first.toLowerCase();
+  }
+}
+
+int _groupedMediaArea(DetectedMedia m) {
+  if (m.resolution != null && m.resolution!.contains('x')) {
+    final parts = m.resolution!.split('x');
+    final w = int.tryParse(parts[0]) ?? 0;
+    final h = int.tryParse(parts[1]) ?? 0;
+    if (w > 0 && h > 0) return w * h;
+  }
+  return 0;
+}
+
+class GroupedMedia {
+  final DetectedMedia primary;
+  final List<DetectedMedia> variants;
+  const GroupedMedia({required this.primary, this.variants = const []});
+  int get totalCount => 1 + variants.length;
+  List<DetectedMedia> get all => [primary, ...variants];
+}
+
+/// Toggle: false = collapse variants by [mediaGroupKey] (default), true = show all separately.
+final showGroupedVariantsProvider = StateProvider<bool>((ref) => false);
+
+final groupedFilteredMediaProvider = Provider<List<GroupedMedia>>((ref) {
+  final items = ref.watch(filteredMediaProvider);
+  final expandAll = ref.watch(showGroupedVariantsProvider);
+  if (expandAll) {
+    return items.map((m) => GroupedMedia(primary: m)).toList();
+  }
+  final Map<String, List<DetectedMedia>> groups = {};
+  for (final m in items) {
+    final key = mediaGroupKey(m);
+    groups.putIfAbsent(key, () => []).add(m);
+  }
+
+  final List<GroupedMedia> result = [];
+  for (final entry in groups.entries) {
+    final list = entry.value;
+    if (list.length == 1) {
+      result.add(GroupedMedia(primary: list.first));
+    } else {
+      // Sort: largest resolution first, then largest file size
+      list.sort((a, b) {
+        final areaA = _groupedMediaArea(a);
+        final areaB = _groupedMediaArea(b);
+        if (areaB != areaA) return areaB.compareTo(areaA);
+        if (b.sizeBytes != a.sizeBytes) return b.sizeBytes.compareTo(a.sizeBytes);
+        return a.domIndex.compareTo(b.domIndex);
+      });
+
+      // Thumbnail Inheritance: if primary lacks thumbnail, borrow from any variant in group
+      String? bestThumb = list.first.thumbnailUrl;
+      if (bestThumb == null || bestThumb.isEmpty) {
+        for (final item in list) {
+          if (item.thumbnailUrl != null && item.thumbnailUrl!.isNotEmpty) {
+            bestThumb = item.thumbnailUrl;
+            break;
+          }
+        }
+      }
+
+      final primaryWithThumb = (bestThumb != null && (list.first.thumbnailUrl == null || list.first.thumbnailUrl!.isEmpty))
+          ? list.first.copyWith(thumbnailUrl: bestThumb)
+          : list.first;
+
+      result.add(GroupedMedia(
+        primary: primaryWithThumb,
+        variants: list.sublist(1).map((v) {
+          if ((v.thumbnailUrl == null || v.thumbnailUrl!.isEmpty) && bestThumb != null) {
+            return v.copyWith(thumbnailUrl: bestThumb);
+          }
+          return v;
+        }).toList(),
+      ));
+    }
+  }
+
+  // Keep page order by primary.domIndex
+  result.sort((a, b) => a.primary.domIndex.compareTo(b.primary.domIndex));
+  return result;
+});
+
 class SnifferNotifier extends StateNotifier<Map<String, List<DetectedMedia>>> {
   SnifferNotifier() : super({});
 
   final Map<String, Set<String>> _tabDetectedUrls = {};
 
-  /// Smart Canonical URL Stripping for deduplication & sizing normalization
+  /// Canonical URL for dedup: strips ONLY ephemeral/auth params.
+  static const _ephemeralKeys = {
+    '_',
+    'token',
+    't',
+    'timestamp',
+    'sig',
+    'signature',
+    '_t',
+    'auth',
+    'expires',
+    'key',
+    'session',
+    'nonce',
+    'bytestart',
+    'byteend',
+    '_nc_cat',
+    '_nc_sid',
+    '_nc_ohc',
+    '_nc_ht',
+    'edm',
+    'ccb',
+    'st',
+    'e',
+    'oh',
+    'oe',
+  };
+
   String _canonicalUrl(String rawUrl) {
     try {
       final uri = Uri.parse(rawUrl);
-      final cleanParams = Map<String, dynamic>.from(uri.queryParameters)
-        ..removeWhere((k, v) => const [
-              '_',
-              'token',
-              't',
-              'timestamp',
-              'sig',
-              '_t',
-              'auth',
-              'expires',
-              'key',
-              'session',
-              'nonce',
-              'auto',
-              'w',
-              'h',
-              'width',
-              'height',
-              'fit',
-              'crop',
-              'q',
-              'quality',
-              'dpr',
-              'bytestart',
-              'byteend',
-              '_nc_cat',
-              '_nc_sid',
-              '_nc_ohc',
-              '_nc_ht',
-              'edm',
-              'ccb'
-            ].contains(k.toLowerCase()));
+      final cleanParams = Map<String, String>.from(uri.queryParameters)
+        ..removeWhere((k, _) => _ephemeralKeys.contains(k.toLowerCase()));
 
       final base = '${uri.scheme}://${uri.host}${uri.path}';
       if (cleanParams.isEmpty) return base.toLowerCase();
-      final sortedQuery = cleanParams.entries.map((e) => '${e.key}=${e.value}').join('&');
+      final sortedKeys = cleanParams.keys.toList()..sort();
+      final sortedQuery = sortedKeys.map((k) => '$k=${cleanParams[k]}').join('&');
       return '$base?$sortedQuery'.toLowerCase();
     } catch (_) {
       return rawUrl.split('?').first.toLowerCase();
+    }
+  }
+
+  String? _detectResolution(String url, {int width = 0, int height = 0}) {
+    if (width > 0 && height > 0) {
+      return '${width}x$height';
+    }
+    final clean = url.toLowerCase();
+
+    // 1. Matches e.g. _1440_2560_, _2160_3840_, _720_1280_, 1920x1080 (isolated from longer ID numbers)
+    final resMatch = RegExp(r'(?:^|[^0-9])(\d{3,4})[x_](\d{3,4})(?:[^0-9]|$)').firstMatch(clean);
+    if (resMatch != null) {
+      final d1 = int.tryParse(resMatch.group(1)!) ?? 0;
+      final d2 = int.tryParse(resMatch.group(2)!) ?? 0;
+      if (d1 >= 240 && d2 >= 240) {
+        return '${d1}x$d2';
+      }
+    }
+
+    // 2. Named tokens
+    if (clean.contains('uhd') || clean.contains('2160p') || clean.contains('4k')) {
+      return '3840x2160';
+    }
+    if (clean.contains('1440p') || clean.contains('2k') || clean.contains('qhd')) {
+      return '2560x1440';
+    }
+    if (clean.contains('1080p') || clean.contains('fhd')) {
+      return '1920x1080';
+    }
+    if (clean.contains('720p') || clean.contains('-hd_') || clean.contains('_hd_')) {
+      return '1280x720';
+    }
+    if (clean.contains('540p')) {
+      return '960x540';
+    }
+    if (clean.contains('360p') || clean.contains('-sd_') || clean.contains('_sd_')) {
+      return '640x360';
+    }
+
+    return null;
+  }
+
+  void _probeMediaSizeAsync(String tabId, DetectedMedia media) {
+    if (media.sizeBytes > 0 || media.mediaType == MediaType.stream) return;
+    final uri = Uri.tryParse(media.url);
+    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) return;
+
+    Future.microtask(() async {
+      try {
+        final settings = HiveService.getSettings();
+        final dio = DioClient.createDio(
+          settings,
+          targetUrl: media.url,
+          refererUrl: media.pageUrl,
+          customHeaders: media.headers,
+        );
+        final response = await dio.head(
+          media.url,
+          options: Options(
+            validateStatus: (status) => status != null && status < 400,
+            followRedirects: true,
+          ),
+        );
+        final lengthStr = response.headers.value('content-length');
+        if (lengthStr != null) {
+          final size = int.tryParse(lengthStr) ?? 0;
+          if (size > 0) {
+            updateMediaSize(tabId, media.id, size);
+          }
+        }
+      } catch (_) {}
+    });
+  }
+
+  void updateMediaSize(String tabId, String mediaId, int sizeBytes) {
+    final currentTabList = state[tabId];
+    if (currentTabList == null) return;
+    final idx = currentTabList.indexWhere((m) => m.id == mediaId);
+    if (idx != -1 && currentTabList[idx].sizeBytes != sizeBytes) {
+      final updatedList = List<DetectedMedia>.from(currentTabList);
+      updatedList[idx] = updatedList[idx].copyWith(sizeBytes: sizeBytes);
+      state = {
+        ...state,
+        tabId: updatedList,
+      };
     }
   }
 
@@ -188,7 +439,7 @@ class SnifferNotifier extends StateNotifier<Map<String, List<DetectedMedia>>> {
 
     for (final data in items) {
       final url = data['url'] as String? ?? '';
-      if (url.isEmpty) continue;
+      if (url.isEmpty || isJunkStreamSegment(url)) continue;
 
       final canonical = _canonicalUrl(url);
       final pageUrl = data['pageUrl'] as String? ?? '';
@@ -200,6 +451,7 @@ class SnifferNotifier extends StateNotifier<Map<String, List<DetectedMedia>>> {
       final sizeBytes = data['sizeBytes'] as int? ?? 0;
       final thumbnailUrl = data['thumbnailUrl'] as String?;
       final domIndex = data['domIndex'] as int? ?? 0;
+      final resolvedRes = _detectResolution(url, width: width, height: height);
 
       // If already exists, smart merge / enrich missing metadata
       if (detectedSet.contains(canonical)) {
@@ -210,7 +462,7 @@ class SnifferNotifier extends StateNotifier<Map<String, List<DetectedMedia>>> {
             sizeBytes: old.sizeBytes > 0 ? old.sizeBytes : sizeBytes,
             resolution: (old.resolution != null && old.resolution!.isNotEmpty)
                 ? old.resolution
-                : (width > 0 && height > 0 ? '${width}x$height' : null),
+                : resolvedRes,
             thumbnailUrl: (old.thumbnailUrl != null && old.thumbnailUrl!.isNotEmpty)
                 ? old.thumbnailUrl
                 : thumbnailUrl,
@@ -229,7 +481,7 @@ class SnifferNotifier extends StateNotifier<Map<String, List<DetectedMedia>>> {
       final ext = _extractExtension(url, mediaType);
       final filename = _generateFilename(url, title, ext);
 
-      newItems.add(DetectedMedia(
+      final newItem = DetectedMedia(
         id: const Uuid().v4(),
         tabId: tabId,
         url: url,
@@ -240,9 +492,14 @@ class SnifferNotifier extends StateNotifier<Map<String, List<DetectedMedia>>> {
         sizeBytes: sizeBytes,
         thumbnailUrl: thumbnailUrl ?? (mediaType == MediaType.image ? url : null),
         detectedAt: DateTime.now(),
-        resolution: width > 0 && height > 0 ? '${width}x$height' : null,
+        resolution: resolvedRes,
         domIndex: domIndex,
-      ));
+      );
+
+      newItems.add(newItem);
+      if (sizeBytes == 0) {
+        _probeMediaSizeAsync(tabId, newItem);
+      }
     }
 
     if (newItems.isNotEmpty || hasUpdates) {
@@ -267,11 +524,12 @@ class SnifferNotifier extends StateNotifier<Map<String, List<DetectedMedia>>> {
     int domIndex = 0,
     Map<String, String>? headers,
   }) {
-    if (url.isEmpty || tabId.isEmpty) return;
+    if (url.isEmpty || tabId.isEmpty || isJunkStreamSegment(url)) return;
 
     final canonical = _canonicalUrl(url);
     final detectedSet = _tabDetectedUrls.putIfAbsent(tabId, () => <String>{});
     final currentTabList = List<DetectedMedia>.from(state[tabId] ?? []);
+    final resolvedRes = _detectResolution(url, width: width, height: height);
 
     // Smart merge / enrich if already detected
     if (detectedSet.contains(canonical)) {
@@ -282,7 +540,7 @@ class SnifferNotifier extends StateNotifier<Map<String, List<DetectedMedia>>> {
           sizeBytes: old.sizeBytes > 0 ? old.sizeBytes : sizeBytes,
           resolution: (old.resolution != null && old.resolution!.isNotEmpty)
               ? old.resolution
-              : (width > 0 && height > 0 ? '${width}x$height' : null),
+              : resolvedRes,
           thumbnailUrl: (old.thumbnailUrl != null && old.thumbnailUrl!.isNotEmpty)
               ? old.thumbnailUrl
               : thumbnailUrl,
@@ -317,7 +575,7 @@ class SnifferNotifier extends StateNotifier<Map<String, List<DetectedMedia>>> {
       thumbnailUrl: thumbnailUrl ?? (mediaType == MediaType.image ? url : null),
       headers: headers ?? {},
       detectedAt: DateTime.now(),
-      resolution: width > 0 && height > 0 ? '${width}x$height' : null,
+      resolution: resolvedRes,
       domIndex: domIndex,
     );
 
@@ -325,6 +583,10 @@ class SnifferNotifier extends StateNotifier<Map<String, List<DetectedMedia>>> {
       ...state,
       tabId: [item, ...currentTabList],
     };
+
+    if (sizeBytes == 0) {
+      _probeMediaSizeAsync(tabId, item);
+    }
   }
 
   void toggleSelect(String mediaId) {
@@ -362,92 +624,108 @@ class SnifferNotifier extends StateNotifier<Map<String, List<DetectedMedia>>> {
   }
 
   void clearTabMedia(String tabId) {
-    _tabDetectedUrls[tabId]?.clear();
+    _tabDetectedUrls.remove(tabId);
     state = {
       ...state,
       tabId: [],
     };
   }
 
-  void clearAll() {
-    _tabDetectedUrls.clear();
-    state = {};
-  }
-
   MediaType _detectMediaType(String url, String? typeStr, String? mime) {
-    final clean = url.split('?')[0].toLowerCase();
-    if (clean.endsWith('.m3u8') || (mime?.contains('mpegurl') ?? false)) {
-      return MediaType.stream;
+    if (typeStr != null) {
+      if (typeStr == 'stream') return MediaType.stream;
+      if (typeStr == 'video') return MediaType.video;
+      if (typeStr == 'image') return MediaType.image;
+      if (typeStr == 'audio') return MediaType.audio;
     }
-    if (typeStr == 'video' ||
-        clean.endsWith('.mp4') ||
-        clean.endsWith('.webm') ||
-        clean.endsWith('.mov') ||
-        clean.endsWith('.mkv') ||
-        (mime?.contains('video') ?? false)) {
-      return MediaType.video;
-    }
-    if (typeStr == 'image' ||
-        clean.endsWith('.jpg') ||
-        clean.endsWith('.jpeg') ||
-        clean.endsWith('.png') ||
-        clean.endsWith('.webp') ||
-        clean.endsWith('.avif') ||
-        clean.endsWith('.gif') ||
-        (mime?.contains('image') ?? false)) {
+
+    final lowerMime = (mime ?? '').toLowerCase();
+    if (lowerMime.contains('mpegurl') || lowerMime.contains('dash+xml')) return MediaType.stream;
+    if (lowerMime.startsWith('video/')) return MediaType.video;
+    if (lowerMime.startsWith('image/')) return MediaType.image;
+    if (lowerMime.startsWith('audio/')) return MediaType.audio;
+
+    final cleanUrl = url.split('?').first.toLowerCase();
+    if (cleanUrl.endsWith('.m3u8') || cleanUrl.endsWith('.mpd')) return MediaType.stream;
+    if (cleanUrl.endsWith('.mp4') || cleanUrl.endsWith('.webm') || cleanUrl.endsWith('.mov') || cleanUrl.endsWith('.mkv') || cleanUrl.endsWith('.avi')) return MediaType.video;
+    if (cleanUrl.endsWith('.jpg') || cleanUrl.endsWith('.jpeg') || cleanUrl.endsWith('.png') || cleanUrl.endsWith('.webp') || cleanUrl.endsWith('.gif') || cleanUrl.endsWith('.avif')) return MediaType.image;
+    if (cleanUrl.endsWith('.mp3') || cleanUrl.endsWith('.aac') || cleanUrl.endsWith('.wav') || cleanUrl.endsWith('.ogg') || cleanUrl.endsWith('.m4a') || cleanUrl.endsWith('.flac')) return MediaType.audio;
+
+    final fullLower = url.toLowerCase();
+    if (fullLower.contains('images.unsplash.com') ||
+        fullLower.contains('/photo-') ||
+        fullLower.contains('format=') ||
+        fullLower.contains('auto=format') ||
+        fullLower.contains('images.pexels.com') ||
+        fullLower.contains('cdn.pixabay.com') ||
+        fullLower.contains('i.imgur.com') ||
+        fullLower.contains('rule34') ||
+        fullLower.contains('donmai') ||
+        fullLower.contains('gelbooru')) {
       return MediaType.image;
     }
-    if (typeStr == 'audio' ||
-        clean.endsWith('.mp3') ||
-        clean.endsWith('.aac') ||
-        clean.endsWith('.wav') ||
-        clean.endsWith('.m4a') ||
-        (mime?.contains('audio') ?? false)) {
-      return MediaType.audio;
-    }
+
     return MediaType.other;
   }
 
-  String _extractExtension(String url, MediaType type) {
-    final clean = url.split('?')[0];
-    final lastDot = clean.lastIndexOf('.');
-    if (lastDot != -1 && lastDot > clean.lastIndexOf('/')) {
-      return clean.substring(lastDot);
-    }
-    switch (type) {
+  String _extractExtension(String url, MediaType mediaType) {
+    try {
+      final cleanPath = Uri.parse(url).path;
+      final dotIndex = cleanPath.lastIndexOf('.');
+      if (dotIndex != -1 && dotIndex < cleanPath.length - 1) {
+        final ext = cleanPath.substring(dotIndex).toLowerCase();
+        if (ext.length <= 5 && RegExp(r'^\.[a-z0-9]+$').hasMatch(ext)) {
+          return ext;
+        }
+      }
+    } catch (_) {}
+
+    switch (mediaType) {
+      case MediaType.image:
+        return '.jpg';
       case MediaType.video:
         return '.mp4';
       case MediaType.stream:
-        return '.m3u8';
-      case MediaType.image:
-        return '.jpg';
+        return '.mp4';
       case MediaType.audio:
         return '.mp3';
-      default:
+      case MediaType.document:
+        return '.pdf';
+      case MediaType.other:
         return '.dat';
     }
   }
 
-  String _generateFilename(String url, String? title, String ext) {
+  String _generateFilename(String url, String? title, String extension) {
+    String baseName = '';
     if (title != null && title.trim().isNotEmpty) {
-      final sanitized = title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
-      if (sanitized.isNotEmpty) {
-        final withExt = sanitized.toLowerCase().endsWith(ext.toLowerCase())
-            ? sanitized
-            : '$sanitized$ext';
-        return withExt.length > 60 ? '${withExt.substring(0, 56)}$ext' : withExt;
-      }
+      baseName = title.trim();
+    } else {
+      try {
+        final uri = Uri.parse(url);
+        final segment = uri.pathSegments.isNotEmpty ? uri.pathSegments.last : '';
+        if (segment.isNotEmpty) {
+          baseName = Uri.decodeComponent(segment);
+        }
+      } catch (_) {}
     }
-    try {
-      final uri = Uri.parse(url);
-      final segment = uri.pathSegments.isNotEmpty ? uri.pathSegments.last : 'media';
-      if (segment.isNotEmpty) {
-        final sanitized = segment.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').split('?').first;
-        return sanitized.toLowerCase().endsWith(ext.toLowerCase())
-            ? sanitized
-            : '$sanitized$ext';
-      }
-    } catch (_) {}
-    return 'media_${DateTime.now().millisecondsSinceEpoch}$ext';
+
+    if (baseName.isEmpty) {
+      baseName = 'media_${DateTime.now().millisecondsSinceEpoch}';
+    }
+
+    baseName = baseName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+
+    final extLower = extension.toLowerCase();
+    if (baseName.toLowerCase().endsWith(extLower)) {
+      baseName = baseName.substring(0, baseName.length - extLower.length);
+    }
+
+    final maxBaseLength = 60 - extension.length;
+    if (baseName.length > maxBaseLength) {
+      baseName = baseName.substring(0, maxBaseLength);
+    }
+
+    return '$baseName$extension';
   }
 }

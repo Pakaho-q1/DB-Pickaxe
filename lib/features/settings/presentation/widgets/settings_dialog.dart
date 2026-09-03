@@ -604,6 +604,42 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> with SingleTick
         ),
         const SizedBox(height: 16),
         const Divider(),
+        const Text(
+          'Webpage Auto-Interaction & Sniffer Triggers',
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.darkTextPrimary),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Control automated behaviors during webpage scanning. Keep OFF if websites duplicate video entries or auto-reload.',
+          style: TextStyle(fontSize: 11, color: AppTheme.darkTextSecondary),
+        ),
+        const SizedBox(height: 10),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Auto-Scroll to Reveal Lazy Media', style: TextStyle(fontSize: 13, color: AppTheme.darkTextPrimary)),
+          subtitle: const Text('Simulates a brief scroll to trigger lazy-loaded images and dynamic feeds', style: TextStyle(fontSize: 11, color: AppTheme.darkTextSecondary)),
+          value: _tempSettings.enableAutoScroll,
+          activeThumbColor: AppTheme.accentCyan,
+          onChanged: (val) {
+            setState(() {
+              _tempSettings = _tempSettings.copyWith(enableAutoScroll: val);
+            });
+          },
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Auto-Interact Video Elements', style: TextStyle(fontSize: 13, color: AppTheme.darkTextPrimary)),
+          subtitle: const Text('Sends a brief touch/hover event to player components to expose hidden stream URLs', style: TextStyle(fontSize: 11, color: AppTheme.accentRose)),
+          value: _tempSettings.enableAutoVideoTrigger,
+          activeThumbColor: AppTheme.accentRose,
+          onChanged: (val) {
+            setState(() {
+              _tempSettings = _tempSettings.copyWith(enableAutoVideoTrigger: val);
+            });
+          },
+        ),
+        const SizedBox(height: 16),
+        const Divider(),
         // Floating Sniffer Hub Customization
         const Text(
           'Floating Sniffer Hub (แผงควบคุมลอยบนหน้าเว็บ)',
@@ -675,7 +711,7 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> with SingleTick
             ),
             DropdownMenuItem(
               value: SnifferHubPosition.customDraggable,
-              child: Text('Custom Draggable (ลากตำแหน่งอิสระได้ตามใจ)'),
+              child: Text('Custom Draggable (อิสระตามการลากวาง)'),
             ),
           ],
           onChanged: (pos) {
@@ -686,6 +722,85 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> with SingleTick
             }
           },
         ),
+        const SizedBox(height: 16),
+        const Divider(),
+        const Text(
+          '1DM & IDM Powerhouse Features',
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.darkTextPrimary),
+        ),
+        const SizedBox(height: 8),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Multi-Threaded HLS / M3U8 Downloader', style: TextStyle(fontSize: 13, color: AppTheme.darkTextPrimary)),
+          subtitle: const Text('Download .m3u8 live/VOD stream segments with parallel worker threads (10x faster)', style: TextStyle(fontSize: 11, color: AppTheme.darkTextSecondary)),
+          value: _tempSettings.enableHlsMultiThread,
+          activeThumbColor: AppTheme.accentCyan,
+          onChanged: (val) {
+            setState(() {
+              _tempSettings = _tempSettings.copyWith(enableHlsMultiThread: val);
+            });
+          },
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Auto-Merge Video + Audio Tracks (DASH)', style: TextStyle(fontSize: 13, color: AppTheme.darkTextPrimary)),
+          subtitle: const Text('Auto-pair separate high-res video and audio streams (Reddit, Twitter, etc.) and mux into MP4', style: TextStyle(fontSize: 11, color: AppTheme.darkTextSecondary)),
+          value: _tempSettings.autoMergeAudioVideo,
+          activeThumbColor: AppTheme.accentCyan,
+          onChanged: (val) {
+            setState(() {
+              _tempSettings = _tempSettings.copyWith(autoMergeAudioVideo: val);
+            });
+          },
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Built-in Popup & AdBlocker', style: TextStyle(fontSize: 13, color: AppTheme.darkTextPrimary)),
+          subtitle: const Text('Suppress clickjacking redirects, popunders, and aggressive ad scripts on video sites', style: TextStyle(fontSize: 11, color: AppTheme.darkTextSecondary)),
+          value: _tempSettings.enableAdBlocker,
+          activeThumbColor: AppTheme.accentCyan,
+          onChanged: (val) {
+            setState(() {
+              _tempSettings = _tempSettings.copyWith(enableAdBlocker: val);
+            });
+          },
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Auto-Create Subfolders by Website/Album', style: TextStyle(fontSize: 13, color: AppTheme.darkTextPrimary)),
+          subtitle: const Text('Automatically organize batch downloads into dedicated subfolders based on page title', style: TextStyle(fontSize: 11, color: AppTheme.darkTextSecondary)),
+          value: _tempSettings.autoCreateSubfolders,
+          activeThumbColor: AppTheme.accentCyan,
+          onChanged: (val) {
+            setState(() {
+              _tempSettings = _tempSettings.copyWith(autoCreateSubfolders: val);
+            });
+          },
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Auto-Grab Subtitles (.srt / .vtt)', style: TextStyle(fontSize: 13, color: AppTheme.darkTextPrimary)),
+          subtitle: const Text('Auto-detect closed captions and subtitle tracks accompanying videos', style: TextStyle(fontSize: 11, color: AppTheme.darkTextSecondary)),
+          value: _tempSettings.autoGrabSubtitles,
+          activeThumbColor: AppTheme.accentCyan,
+          onChanged: (val) {
+            setState(() {
+              _tempSettings = _tempSettings.copyWith(autoGrabSubtitles: val);
+            });
+          },
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Embed Cover Art & Metadata Tags', style: TextStyle(fontSize: 13, color: AppTheme.darkTextPrimary)),
+          subtitle: const Text('Write thumbnail cover art, title, and origin URL into MP4/MP3 file headers', style: TextStyle(fontSize: 11, color: AppTheme.darkTextSecondary)),
+          value: _tempSettings.embedMetadataAndCoverArt,
+          activeThumbColor: AppTheme.accentCyan,
+          onChanged: (val) {
+            setState(() {
+              _tempSettings = _tempSettings.copyWith(embedMetadataAndCoverArt: val);
+            });
+          },
+        ),
       ],
     );
   }
@@ -694,19 +809,43 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> with SingleTick
     return ListView(
       children: [
         // DNS Presets & Custom DNS
-        const Text('DNS over HTTPS (DoH) & DNS Presets', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.darkTextPrimary)),
-        const SizedBox(height: 8),
+        const Text('DNS over HTTPS (DoH) & Secure DNS', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.darkTextPrimary)),
+        const SizedBox(height: 4),
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: AppTheme.primaryColor.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppTheme.primaryLight.withValues(alpha: 0.3)),
+          ),
+          child: const Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.shield_outlined, size: 16, color: AppTheme.accentCyan),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Encrypted DNS (DoH) bypasses ISP blocks and censorship for media sites like Gelbooru, Danbooru, and Rule34. Cloudflare (1.1.1.1) is enabled by default.',
+                  style: TextStyle(fontSize: 11, color: AppTheme.darkTextSecondary, height: 1.3),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
         DropdownButtonFormField<String>(
-          initialValue: _tempSettings.selectedDnsPreset,
+          initialValue: DnsPreset.presets.any((p) => p.name == _tempSettings.selectedDnsPreset)
+              ? _tempSettings.selectedDnsPreset
+              : DnsPreset.presets.first.name,
           dropdownColor: AppTheme.darkSurface,
           decoration: const InputDecoration(
-            labelText: 'Select DNS Provider',
+            labelText: 'Active DNS Provider',
             isDense: true,
           ),
           items: DnsPreset.presets.map((preset) {
             return DropdownMenuItem(
               value: preset.name,
-              child: Text('${preset.name} - ${preset.description}'),
+              child: Text('${preset.name} - ${preset.description}', style: const TextStyle(fontSize: 12)),
             );
           }).toList(),
           onChanged: (val) {

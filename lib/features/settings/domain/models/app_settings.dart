@@ -1,11 +1,11 @@
-import '../../../../core/constants/app_constants.dart';
+﻿import '../../../../core/constants/app_constants.dart';
 import 'app_shortcuts.dart';
 
 class AppSettings {
   final int maxConcurrentDownloads;
   final String defaultDownloadPath;
   final bool autoCategorizeFolders;
-  final double speedLimitKBps; // 0 = Unlimited
+  final double speedLimitKBps;
   final int connectionTimeoutSeconds;
   final int maxRetries;
   final int retryDelaySeconds;
@@ -20,13 +20,22 @@ class AppSettings {
   final String customDohUrl;
   final int minImageSizeKB;
   final bool filterTinyIcons;
-  final int threadsPerDownload; // 1 - 16 Threads per download
-  final bool enableChunkedDownload; // Multi-thread acceleration
-  final int minChunkSizeMB; // Minimum file size in MB to activate multi-threading
-  final AppStartupBehavior startupBehavior; // New Tab / Last Tab / Restore All / New + Restore
-  final AppShortcuts shortcuts; // Configurable Keybindings
-  final SnifferHubStyle snifferHubStyle; // Glass Capsule / Mini FAB / Slim Bar
-  final SnifferHubPosition snifferHubPosition; // Bottom-Right / Bottom-Left / Bottom-Center / Top-Right / Top-Left / Custom
+  final int threadsPerDownload;
+  final bool enableChunkedDownload;
+  final int minChunkSizeMB;
+  final AppStartupBehavior startupBehavior;
+  final AppShortcuts shortcuts;
+  final SnifferHubStyle snifferHubStyle;
+  final SnifferHubPosition snifferHubPosition;
+  final bool enableAutoScroll;
+  final bool enableAutoVideoTrigger;
+  final String filenameTemplate; // e.g. {title} - {filename}
+  final bool autoCreateSubfolders; // Auto create subfolder by website/album
+  final bool enableAdBlocker; // Block popup / popunder ads
+  final bool enableHlsMultiThread; // Download HLS/m3u8 with multi-threaded segment pooling
+  final bool autoMergeAudioVideo; // Auto merge separate DASH video + audio streams
+  final bool autoGrabSubtitles; // Auto-grab subtitles (.vtt / .srt)
+  final bool embedMetadataAndCoverArt; // Embed cover art and metadata tags
 
   const AppSettings({
     this.maxConcurrentDownloads = 3,
@@ -43,7 +52,7 @@ class AppSettings {
     this.proxyUsername = '',
     this.proxyPassword = '',
     this.proxyEnabled = false,
-    this.selectedDnsPreset = 'System Default',
+    this.selectedDnsPreset = 'Cloudflare (1.1.1.1)',
     this.customDohUrl = '',
     this.minImageSizeKB = 20,
     this.filterTinyIcons = true,
@@ -54,6 +63,15 @@ class AppSettings {
     this.shortcuts = const AppShortcuts(),
     this.snifferHubStyle = SnifferHubStyle.glassCapsule,
     this.snifferHubPosition = SnifferHubPosition.bottomRight,
+    this.enableAutoScroll = false,
+    this.enableAutoVideoTrigger = false,
+    this.filenameTemplate = '{title} - {filename}',
+    this.autoCreateSubfolders = true,
+    this.enableAdBlocker = true,
+    this.enableHlsMultiThread = true,
+    this.autoMergeAudioVideo = true,
+    this.autoGrabSubtitles = true,
+    this.embedMetadataAndCoverArt = true,
   });
 
   AppSettings copyWith({
@@ -82,6 +100,15 @@ class AppSettings {
     AppShortcuts? shortcuts,
     SnifferHubStyle? snifferHubStyle,
     SnifferHubPosition? snifferHubPosition,
+    bool? enableAutoScroll,
+    bool? enableAutoVideoTrigger,
+    String? filenameTemplate,
+    bool? autoCreateSubfolders,
+    bool? enableAdBlocker,
+    bool? enableHlsMultiThread,
+    bool? autoMergeAudioVideo,
+    bool? autoGrabSubtitles,
+    bool? embedMetadataAndCoverArt,
   }) {
     return AppSettings(
       maxConcurrentDownloads: maxConcurrentDownloads ?? this.maxConcurrentDownloads,
@@ -109,6 +136,15 @@ class AppSettings {
       shortcuts: shortcuts ?? this.shortcuts,
       snifferHubStyle: snifferHubStyle ?? this.snifferHubStyle,
       snifferHubPosition: snifferHubPosition ?? this.snifferHubPosition,
+      enableAutoScroll: enableAutoScroll ?? this.enableAutoScroll,
+      enableAutoVideoTrigger: enableAutoVideoTrigger ?? this.enableAutoVideoTrigger,
+      filenameTemplate: filenameTemplate ?? this.filenameTemplate,
+      autoCreateSubfolders: autoCreateSubfolders ?? this.autoCreateSubfolders,
+      enableAdBlocker: enableAdBlocker ?? this.enableAdBlocker,
+      enableHlsMultiThread: enableHlsMultiThread ?? this.enableHlsMultiThread,
+      autoMergeAudioVideo: autoMergeAudioVideo ?? this.autoMergeAudioVideo,
+      autoGrabSubtitles: autoGrabSubtitles ?? this.autoGrabSubtitles,
+      embedMetadataAndCoverArt: embedMetadataAndCoverArt ?? this.embedMetadataAndCoverArt,
     );
   }
 
@@ -139,6 +175,15 @@ class AppSettings {
       'shortcuts': shortcuts.toMap(),
       'snifferHubStyle': snifferHubStyle.name,
       'snifferHubPosition': snifferHubPosition.name,
+      'enableAutoScroll': enableAutoScroll,
+      'enableAutoVideoTrigger': enableAutoVideoTrigger,
+      'filenameTemplate': filenameTemplate,
+      'autoCreateSubfolders': autoCreateSubfolders,
+      'enableAdBlocker': enableAdBlocker,
+      'enableHlsMultiThread': enableHlsMultiThread,
+      'autoMergeAudioVideo': autoMergeAudioVideo,
+      'autoGrabSubtitles': autoGrabSubtitles,
+      'embedMetadataAndCoverArt': embedMetadataAndCoverArt,
     };
   }
 
@@ -187,7 +232,7 @@ class AppSettings {
       proxyUsername: map['proxyUsername'] as String? ?? '',
       proxyPassword: map['proxyPassword'] as String? ?? '',
       proxyEnabled: map['proxyEnabled'] as bool? ?? false,
-      selectedDnsPreset: map['selectedDnsPreset'] as String? ?? 'System Default',
+      selectedDnsPreset: map['selectedDnsPreset'] as String? ?? 'Cloudflare (1.1.1.1)',
       customDohUrl: map['customDohUrl'] as String? ?? '',
       minImageSizeKB: map['minImageSizeKB'] as int? ?? 20,
       filterTinyIcons: map['filterTinyIcons'] as bool? ?? true,
@@ -198,6 +243,15 @@ class AppSettings {
       shortcuts: shortcuts,
       snifferHubStyle: snifferHubStyle,
       snifferHubPosition: snifferHubPosition,
+      enableAutoScroll: map['enableAutoScroll'] as bool? ?? false,
+      enableAutoVideoTrigger: map['enableAutoVideoTrigger'] as bool? ?? false,
+      filenameTemplate: map['filenameTemplate'] as String? ?? '{title} - {filename}',
+      autoCreateSubfolders: map['autoCreateSubfolders'] as bool? ?? true,
+      enableAdBlocker: map['enableAdBlocker'] as bool? ?? true,
+      enableHlsMultiThread: map['enableHlsMultiThread'] as bool? ?? true,
+      autoMergeAudioVideo: map['autoMergeAudioVideo'] as bool? ?? true,
+      autoGrabSubtitles: map['autoGrabSubtitles'] as bool? ?? true,
+      embedMetadataAndCoverArt: map['embedMetadataAndCoverArt'] as bool? ?? true,
     );
   }
 }
